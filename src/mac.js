@@ -16,23 +16,39 @@ const POPULAR = [
 ];
 
 // ---------- catalog ----------
+// Where each kind of cask artifact goes (user-level folders, no admin needed). Apps + suites go to /Applications.
+const EXTRA_DIRS = {
+  font: 'Library/Fonts', prefpane: 'Library/PreferencePanes', qlplugin: 'Library/QuickLook',
+  screen_saver: 'Library/Screen Savers', colorpicker: 'Library/ColorPickers', service: 'Library/Services',
+  input_method: 'Library/Input Methods', dictionary: 'Library/Dictionaries', keyboard_layout: 'Library/Keyboard Layouts',
+  mdimporter: 'Library/Spotlight', audio_unit_plugin: 'Library/Audio/Plug-Ins/Components',
+  vst_plugin: 'Library/Audio/Plug-Ins/VST', vst3_plugin: 'Library/Audio/Plug-Ins/VST3',
+};
+const KIND_LABEL = { font: 'Font', prefpane: 'Settings pane', qlplugin: 'Quick Look plugin', screen_saver: 'Screen saver', colorpicker: 'Color picker', service: 'Service', input_method: 'Input method', dictionary: 'Dictionary', keyboard_layout: 'Keyboard layout', mdimporter: 'Spotlight plugin', audio_unit_plugin: 'Audio plugin', vst_plugin: 'Audio plugin', vst3_plugin: 'Audio plugin', suite: 'App suite', installer: 'Installer', pkg: 'Installer' };
+
 function parseArtifacts(arts) {
-  const apps = [], pkgs = [];
+  const apps = [], pkgs = [], extras = [];
+  let manual = null;
+  const push = (arr, list, extra = {}) => {
+    for (const x of list) {
+      if (typeof x === 'string') arr.push({ src: x, dest: path.posix.basename(x), ...extra });
+      else if (x && x.target && arr.length) arr[arr.length - 1].dest = path.posix.basename(String(x.target));
+    }
+  };
   for (const a of arts || []) {
     if (!a || typeof a !== 'object') continue;
     for (const [kind, list] of Object.entries(a)) {
       if (!Array.isArray(list)) continue;
-      if (kind === 'app') {
-        for (const x of list) {
-          if (typeof x === 'string') apps.push({ src: x, dest: path.posix.basename(x) });
-          else if (x && x.target && apps.length) apps[apps.length - 1].dest = path.posix.basename(String(x.target));
-        }
-      } else if (kind === 'pkg') {
-        for (const x of list) if (typeof x === 'string') pkgs.push(x);
-      }
+      if (kind === 'app' || kind === 'suite') push(apps, list);
+      else if (kind === 'pkg') { for (const x of list) if (typeof x === 'string') pkgs.push(x); }
+      else if (EXTRA_DIRS[kind]) push(extras, list, { kind });
+      else if (kind === 'installer') { for (const x of list) if (x && typeof x.manual === 'string') manual = x.manual; }
     }
   }
-  return { apps, pkgs };
+  let kind = 'app';
+  if (!apps.length) kind = pkgs.length ? 'pkg' : manual ? 'installer' : extras.length ? extras[0].kind : 'none';
+  else if (arts && arts.some(a => a && a.suite)) kind = 'suite';
+  return { apps, pkgs, extras, manual, kind };
 }
 
 function slimCask(c, arch) {
@@ -44,8 +60,8 @@ function slimCask(c, arch) {
       url = v.url; sha = v.sha256 || sha; ver = v.version || ver; specs = v.url_specs || specs; break;
     }
   }
-  const { apps, pkgs } = parseArtifacts(c.artifacts);
-  if (!apps.length && !pkgs.length) return null; // fonts, CLI-only, etc.
+  const { apps, pkgs, extras, manual, kind } = parseArtifacts(c.artifacts);
+  if (kind === 'none') return null; // command-line-only tools
   let host = '';
   try { host = new URL(url).hostname; } catch {}
   return {
@@ -56,7 +72,7 @@ function slimCask(c, arch) {
     home: c.homepage || '',
     ver: String(ver || ''),
     url, sha: sha || 'no_check', host,
-    apps, pkgs,
+    apps, pkgs, extras, manual, kind, label: kind === 'app' ? '' : (KIND_LABEL[kind] || ''),
     ua: specs.user_agent || null,
     ref: specs.referer || null,
     deprecated: !!c.deprecated,
@@ -68,14 +84,17 @@ function slimAll(raw, arch) {
   const out = [];
   for (const c of raw) { const s = slimCask(c, arch); if (s) out.push(s); }
   const pop = new Map(POPULAR.map((t, i) => [t, i]));
-  for (const it of out) if (pop.has(it.id)) it.boost = 200 - pop.get(it.id);
+  for (const it of out) {
+    if (pop.has(it.id)) it.boost = 200 - pop.get(it.id);
+    else if (it.kind !== 'app') it.boost = -60; // real apps first, fonts/plugins after
+  }
   return out;
 }
 
 async function fetchCatalog(cacheFile, arch, { force = false } = {}) {
   let cached = null;
   try { cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch {}
-  const fresh = cached && cached.items && cached.items.length > 1000 && Date.now() - cached.ts < 12 * 3600e3 && cached.arch === arch && cached.v === 2;
+  const fresh = cached && cached.items && cached.items.length > 1000 && Date.now() - cached.ts < 12 * 3600e3 && cached.arch === arch && cached.v === 3;
   if (fresh && !force) return { items: cached.items, ts: cached.ts, source: 'cache' };
   try {
     const f = globalThis.__grabFetch || globalThis.fetch;
@@ -84,7 +103,7 @@ async function fetchCatalog(cacheFile, arch, { force = false } = {}) {
     const raw = await res.json();
     const items = slimAll(raw, arch);
     if (items.length < 1000) throw new Error('catalog too small: ' + items.length);
-    const data = { v: 2, ts: Date.now(), arch, items };
+    const data = { v: 3, ts: Date.now(), arch, items };
     try { fs.writeFileSync(cacheFile, JSON.stringify(data)); } catch (e) { log('catalog cache write failed', e); }
     return { items, ts: data.ts, source: 'network' };
   } catch (e) {
@@ -97,11 +116,13 @@ async function fetchCatalog(cacheFile, arch, { force = false } = {}) {
 // ---------- installed apps ----------
 function appDirs() { return ['/Applications', path.join(os.homedir(), 'Applications')]; }
 
+function extraDest(e) { return path.join(os.homedir(), EXTRA_DIRS[e.kind], e.dest); }
 function findInstalledPath(item) {
   for (const a of item.apps || []) for (const d of appDirs()) {
     const p = path.join(d, a.dest);
     if (fs.existsSync(p)) return p;
   }
+  for (const e of item.extras || []) { const p = extraDest(e); if (fs.existsSync(p)) return p; }
   return null;
 }
 
@@ -278,6 +299,35 @@ async function installFile(item, fetched, { forceQuit = false, trashItem, openPa
       if (!fs.existsSync(src)) src = findByName(root, [path.posix.basename(a.src)], 3);
       if (src) plan.push({ src, dest: a.dest });
     }
+    // fonts, plugins, screen savers... -> the matching folder in ~/Library
+    const extraPlan = [];
+    for (const e of item.extras || []) {
+      let src = path.join(root, e.src);
+      if (!fs.existsSync(src)) src = findByName(root, [path.posix.basename(e.src)], 4);
+      if (src) extraPlan.push({ src, dest: extraDest(e) });
+    }
+    if (!plan.length && extraPlan.length) {
+      onStage && onStage('Installing');
+      for (const p of extraPlan) {
+        fs.mkdirSync(path.dirname(p.dest), { recursive: true });
+        rmrf(p.dest);
+        const r = await run('/usr/bin/ditto', [p.src, p.dest], { timeout: 300000 });
+        if (r.code !== 0) throw new Error('Could not copy ' + path.basename(p.dest));
+      }
+      return { status: 'installed', path: extraPlan[0].dest };
+    }
+    // vendor installers that must be run by hand ("Foo Installer.app")
+    if (!plan.length && item.manual) {
+      const inst = path.join(root, item.manual);
+      const src = fs.existsSync(inst) ? inst : findByName(root, [path.posix.basename(item.manual)], 3);
+      if (src) {
+        const keep = path.join(tmp, 'run-' + path.basename(src));
+        await run('/usr/bin/ditto', [src, keep], { timeout: 300000 });
+        await run('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', keep]);
+        await openPath(keep);
+        return { status: 'pkg-opened', keepTmp: true };
+      }
+    }
     if (!plan.length && !(item.pkgs || []).length) {
       const any = findAll(root, '.app', 2).filter(p => !/uninstall/i.test(path.basename(p)));
       if (any.length) plan = [{ src: any[0], dest: path.basename(any[0]) }];
@@ -310,6 +360,7 @@ async function installFile(item, fetched, { forceQuit = false, trashItem, openPa
       await copyApp(p.src, dest, trashItem);
       first = first || dest;
     }
+    for (const p of extraPlan) { fs.mkdirSync(path.dirname(p.dest), { recursive: true }); rmrf(p.dest); await run('/usr/bin/ditto', [p.src, p.dest], { timeout: 300000 }); }
     return { status: 'installed', path: first };
   } finally {
     if (mnt) await detach(mnt);
@@ -319,7 +370,7 @@ async function installFile(item, fetched, { forceQuit = false, trashItem, openPa
 async function uninstall(item, trashItem) {
   const p = findInstalledPath(item);
   if (!p) throw new Error('Not installed');
-  if (await isRunning(p)) await quitApp(p);
+  if (p.endsWith('.app') && await isRunning(p)) await quitApp(p);
   await trashItem(p);
   return true;
 }
@@ -329,4 +380,4 @@ function itemFromUrl(url) {
   return { id: 'url:' + url, name: fileNameFor(url, ''), desc: url, url, sha: 'no_check', apps: [], pkgs: [], ver: '' };
 }
 
-module.exports = { POPULAR, fetchCatalog, slimCask, slimAll, parseArtifacts, findInstalledPath, scanInstalled, fetchItem, installFile, uninstall, itemFromUrl, readVersion, sniff };
+module.exports = { POPULAR, EXTRA_DIRS, fetchCatalog, slimCask, slimAll, parseArtifacts, findInstalledPath, scanInstalled, fetchItem, installFile, uninstall, itemFromUrl, readVersion, sniff };

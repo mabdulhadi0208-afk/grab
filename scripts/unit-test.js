@@ -36,6 +36,8 @@ async function t(name, fn) { try { await fn(); pass++; console.log('ok  ', name)
     { token: 'chromium', name: ['Chromium'], desc: 'Free and open-source web browser', homepage: 'https://www.chromium.org/', url: 'https://x/chromium.zip', version: '1', sha256: 'a'.repeat(64), artifacts: [{ app: ['chrome-mac/Chromium.app'] }] },
     { token: 'discord', name: ['Discord'], desc: 'Voice and text chat software', homepage: 'https://discord.com/', url: 'https://stable.dl2.discordapp.net/apps/osx/0.0.422/Discord.dmg', version: '0.0.422', sha256: '6fedd6856cbc48656704dfc718d52114e12ffae9ae904d429ae6e1ded2081fa2', artifacts: [{ uninstall: [{}] }, { app: ['Discord.app'] }, { zap: [{}] }], variations: { x86_64_linux: { url: null }, arm64_linux: { url: null } } },
     { token: 'visual-studio-code', name: ['Microsoft Visual Studio Code', 'VS Code'], desc: 'Open-source code editor', homepage: 'https://code.visualstudio.com/', url: 'https://update.code.visualstudio.com/1.0/darwin-arm64/stable', version: '1.0', sha256: 'b'.repeat(64), artifacts: [{ app: ['Visual Studio Code.app'] }, { binary: ['code'] }], variations: { sequoia: { url: 'https://update.code.visualstudio.com/1.0/darwin/stable', sha256: 'c'.repeat(64) } } },
+    { token: 'some-suite', name: ['Some Suite'], desc: 'x', homepage: 'https://s.com', url: 'https://s.com/s.zip', version: '1', sha256: 'f'.repeat(64), artifacts: [{ suite: ['Some Suite'] }] },
+    { token: 'mytool-cli', name: ['mytool'], desc: 'cli', homepage: 'https://m.com', url: 'https://m.com/m.zip', version: '1', sha256: 'f'.repeat(64), artifacts: [{ binary: ['mytool'] }] },
     { token: 'font-inter', name: ['Inter'], desc: 'font', homepage: 'https://rsms.me/inter', url: 'https://x/inter.zip', version: '4', sha256: 'd'.repeat(64), artifacts: [{ font: ['Inter.ttc'] }] },
     { token: 'renamed', name: ['Renamed'], desc: 'x', homepage: 'https://r.com', url: 'https://r.com/r.zip', version: '1', sha256: 'e'.repeat(64), artifacts: [{ app: ['Weird Name.app', { target: 'Nice Name.app' }] }] },
     { token: 'some-pkg', name: ['Some Pkg'], desc: 'x', homepage: 'https://p.com', url: 'https://p.com/p.pkg', version: '1', sha256: 'f'.repeat(64), artifacts: [{ pkg: ['Some.pkg'] }] },
@@ -45,7 +47,10 @@ async function t(name, fn) { try { await fn(); pass++; console.log('ok  ', name)
   await t('mac: slim catalog', () => {
     const items = mac.slimAll(RAW, 'arm64');
     const ids = items.map(i => i.id);
-    assert(!ids.includes('font-inter'), 'fonts dropped');
+    const font = items.find(i => i.id === 'font-inter');
+    assert(font && font.kind === 'font' && font.extras[0].dest === 'Inter.ttc', 'fonts kept, go to ~/Library/Fonts');
+    assert.strictEqual(items.find(i => i.id === 'some-suite').kind, 'suite');
+    assert(!ids.includes('mytool-cli'), 'CLI-only dropped');
     assert(!ids.includes('dead'), 'disabled dropped');
     const r = items.find(i => i.id === 'renamed');
     assert.deepStrictEqual(r.apps, [{ src: 'Weird Name.app', dest: 'Nice Name.app' }]);

@@ -63,7 +63,7 @@ function pub(it) {
   return {
     id: it.id, name: it.name, desc: it.desc || '', ver: it.ver || '', home: it.home || '', host: it.host || '',
     publisher: it.publisher || '', verified: IS_MAC ? !!(it.sha && it.sha !== 'no_check') : true,
-    installed, path: installedPath, deprecated: !!it.deprecated,
+    installed, path: installedPath, deprecated: !!it.deprecated, label: it.label || '',
   };
 }
 
@@ -380,6 +380,12 @@ async function runSelfTest() {
     await waitFor(() => catalog.ready || catalog.error, 240000, 'catalog');
     check(catalog.ready, `catalog loaded (${catalog.items.length} apps)`);
     check(catalog.items.length > 3000, 'catalog has thousands of apps');
+    if (IS_MAC) {
+      const kinds = {};
+      for (const i of catalog.items) kinds[i.kind] = (kinds[i.kind] || 0) + 1;
+      U.log('catalog kinds ' + JSON.stringify(kinds));
+      check(catalog.items.length >= 5326, `Mac catalog has 1,200+ more than v1.0 (${catalog.items.length} vs 4126)`);
+    }
     const pop = catalogInfo().popular;
     check(pop.length >= 15, `popular list resolves (${pop.length})`);
   });
@@ -411,6 +417,12 @@ async function runSelfTest() {
         check(!!v, `${id} version readable (${v})`);
       });
     }
+    await T('install font', async () => {
+      const it = itemOrThrow('font-fira-code');
+      const jid = addJob(it, 'install');
+      const j = await waitFor(() => { const x = jobs.get(jid); return ['done', 'error', 'canceled'].includes(x.state) && x; }, 300000, 'font');
+      check(j.state === 'done' && backend.findInstalledPath(it), `Fira Code font installed to ~/Library/Fonts (${j.msg})`);
+    });
     await T('scan', async () => {
       const out = await rescan();
       check(out.some(o => o.id === 'rectangle'), 'installed scan finds Rectangle');

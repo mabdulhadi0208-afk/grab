@@ -102,9 +102,77 @@
         b.className = nb.className; b.title = nb.title;
         $('.fill', b).style.width = $('.fill', nb).style.width;
         $('span', b).textContent = $('span', nb).textContent;
-      } else b.replaceWith(nb);
+      } else { b.replaceWith(nb); fluid.magnet(nb.parentElement); }
     }
   }
+
+  // ---------- fluid motion: smooth inertial scroll, velocity skew, reveals, magnetic buttons, cursor glow ----------
+  const fluid = (() => {
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const main = $('.main'), blob = $('#blob'), glow = $('#sglow');
+    let target = 0, cur = 0, wheeling = false, vel = 0, lastTop = 0, idle = 0;
+    const maxScroll = () => Math.max(0, view.scrollHeight - view.clientHeight);
+    view.addEventListener('wheel', (e) => {
+      if (reduce || e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      if (!wheeling) { cur = target = view.scrollTop; }
+      const d = e.deltaY * (e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? view.clientHeight : 1);
+      target = Math.max(0, Math.min(maxScroll(), target + d));
+      wheeling = true;
+    }, { passive: false });
+    // keyboard / scrollbar drags take over instantly
+    view.addEventListener('pointerdown', () => { wheeling = false; });
+    addEventListener('keydown', (e) => { if (['PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', ' '].includes(e.key) && document.activeElement !== $('#q')) wheeling = false; });
+    let mx = -999, my = -999, bx = -999, by = -999;
+    main.addEventListener('pointermove', (e) => { const r = main.getBoundingClientRect(); mx = e.clientX - r.left; my = e.clientY - r.top; main.classList.add('hov');
+      const c = e.target.closest && e.target.closest('.card');
+      if (c) { const cr = c.getBoundingClientRect(); c.style.setProperty('--mx', (e.clientX - cr.left) + 'px'); c.style.setProperty('--my', (e.clientY - cr.top) + 'px'); }
+    });
+    main.addEventListener('pointerleave', () => main.classList.remove('hov'));
+    (function loop() {
+      requestAnimationFrame(loop);
+      if (wheeling) {
+        cur += (target - cur) * 0.14;
+        if (Math.abs(target - cur) < 0.4) { cur = target; wheeling = false; }
+        view.scrollTop = cur;
+      }
+      const top = view.scrollTop;
+      vel += ((top - lastTop) - vel) * 0.2; lastTop = top;
+      const sk = reduce ? 0 : Math.max(-2.2, Math.min(2.2, vel * -0.06));
+      view.style.setProperty('--sk', sk.toFixed(3) + 'deg');
+      if (Math.abs(vel) > 0.5) { main.classList.add('scrolling'); idle = 0; } else if (++idle > 30) main.classList.remove('scrolling');
+      const h = view.clientHeight, sh = view.scrollHeight;
+      if (sh > h) { const th = Math.max(30, h * h / sh); glow.style.height = th + 'px'; glow.style.transform = `translateY(${view.offsetTop + (top / (sh - h)) * (h - th)}px)`; }
+      if (mx > -999) { bx += (mx - bx) * 0.08; by += (my - by) * 0.08; if (bx < -900) { bx = mx; by = my; } blob.style.transform = `translate(${bx - 260}px, ${by - 260}px)`; }
+    })();
+    const io = new IntersectionObserver((es) => {
+      let k = 0;
+      for (const e of es) if (e.isIntersecting) { e.target.style.setProperty('--d', (k++ % 14) * 38 + 'ms'); e.target.classList.add('on'); io.unobserve(e.target); }
+    }, { root: view, threshold: 0.06, rootMargin: '0px 0px 40px 0px' });
+    function reveal(root) {
+      for (const el of $$('.card, .rowi, .dl, .urlcard', root)) { if (reduce) continue; el.classList.add('rv'); io.observe(el); }
+      magnet(root);
+    }
+    function magnet(root) {
+      for (const b of $$('.btn-solid, .btn-get, .btn.big', root)) {
+        if (b._m) continue; b._m = 1; b.classList.add('mag');
+        b.addEventListener('pointermove', (e) => { const r = b.getBoundingClientRect(); b.style.transform = `translate(${(e.clientX - r.left - r.width / 2) * 0.25}px, ${(e.clientY - r.top - r.height / 2) * 0.4}px)`; });
+        b.addEventListener('pointerleave', () => { b.style.transform = ''; });
+      }
+    }
+    function counters(root) {
+      for (const el of $$('[data-count]', root)) {
+        const n = +el.dataset.count, t0 = performance.now();
+        (function f(now) { const p = Math.min((now - t0) / 1400, 1), e = 1 - Math.pow(1 - p, 4); el.textContent = Math.round(n * e).toLocaleString(); if (p < 1) requestAnimationFrame(f); })(t0);
+      }
+    }
+    function nav() {
+      const a = $('.nav-btn.active'), ind = $('#nav-ind');
+      if (a) { ind.style.transform = `translateY(${a.offsetTop}px)`; ind.style.height = a.offsetHeight + 'px'; }
+    }
+    function jump(y) { wheeling = false; target = cur = y; view.scrollTop = y; }
+    return { reveal, counters, nav, magnet, jump };
+  })();
 
   // ---------- views ----------
   function cardHTML(it, i) {
@@ -113,7 +181,7 @@
     return `<div class="card clickable" data-open="${esc(it.id)}" style="animation-delay:${d}ms">
       ${iconHTML(it)}
       <div class="meta"><div class="name">${esc(it.name)}</div><div class="desc">${esc(subLine(it))}</div>
-      <div class="row"><span class="ver">${esc(verLabel(it))}</span>${actionHTML(it)}</div></div></div>`;
+      <div class="row"><span class="ver">${esc(verLabel(it))}</span>${it.label ? `<span class="pill kindp">${esc(it.label)}</span>` : ''}${actionHTML(it)}</div></div></div>`;
   }
   function rowHTML(it, i, right) {
     remember([it]);
@@ -121,7 +189,7 @@
       <div style="min-width:0"><div class="name">${esc(it.name)}</div><div class="desc">${right.sub}</div></div>
       <div class="acts">${right.acts}</div></div>`;
   }
-  function setView(html) { view.innerHTML = `<div class="view-in">${html}</div>`; hydrateIcons(view); }
+  function setView(html) { view.innerHTML = `<div class="view-in">${html}</div>`; hydrateIcons(view); fluid.reveal(view); fluid.counters(view); }
 
   function wingetNote() {
     if (isMac() || S.info.winget !== false) return '';
@@ -143,8 +211,8 @@
       setView(`<div class="h2"><h2>Results</h2><span class="sub">${S.results.length >= 60 ? 'Top 60' : S.results.length} for "${esc(q)}"</span></div><div class="grid">${S.results.map(cardHTML).join('')}</div>`);
       return;
     }
-    const hero = `<div class="hero"><h1>Get any app. <span class="g">One click.</span></h1><p>Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.</p>
-      <div class="chips"><span class="chip">${I.shield}${isMac() ? 'Checksums verified' : 'Hash-checked by winget'}</span><span class="chip">${I.bolt}No browser, no fake buttons</span><span class="chip">${I.box}${S.cat.ready ? S.cat.count.toLocaleString() + ' apps' : 'Thousands of apps'}</span></div></div>`;
+    const hero = `<div class="hero"><h1>${['Get', 'any', 'app.'].map((w, i) => `<span class="w" style="--i:${i}">${w}</span> `).join('')}<span class="g w" style="--i:3">One click.</span></h1><p>Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.</p>
+      <div class="chips"><span class="chip">${I.shield}${isMac() ? 'Checksums verified' : 'Hash-checked by winget'}</span><span class="chip">${I.bolt}No browser, no fake buttons</span><span class="chip">${I.box}${S.cat.ready ? `<b data-count="${S.cat.count}">0</b>&nbsp;apps` : 'Thousands of apps'}</span></div></div>`;
     if (S.cat.error) { setView(hero + `<div class="empty">${I.globe}<div class="big">Can't reach the catalog</div><div>${esc(S.cat.error)}</div><div style="margin-top:14px"><button class="btn btn-solid" data-retry-cat>Try again</button></div></div>`); return; }
     if (!S.cat.ready) { setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2></div><div class="grid">${'<div class="skel"></div>'.repeat(12)}</div>`); return; }
     setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2><span class="sub">Most grabbed</span></div><div class="grid">${S.cat.popular.map(cardHTML).join('')}</div>`);
@@ -210,12 +278,13 @@
 
   function render() {
     $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
+    fluid.nav();
     if (S.view === 'discover') renderDiscover();
     else if (S.view === 'updates') renderUpdates();
     else if (S.view === 'installed') renderInstalled();
     else renderDownloads();
   }
-  function go(v) { if (S.view === v) return; S.view = v; view.scrollTop = 0; render(); }
+  function go(v) { if (S.view === v) return; S.view = v; fluid.jump(0); render(); }
 
   function badges() {
     const nUp = S.scan ? S.scan.filter(s => s.update && !(S.jobsByItem.get(s.id) && S.jobsByItem.get(s.id).state === 'done')).length : 0;
@@ -255,7 +324,7 @@
       </div>
       <div class="shield">${I.shield}<div>${shield}</div></div>`;
     sh.dataset.id = id;
-    hydrateIcons(sh);
+    hydrateIcons(sh); fluid.magnet(sh);
     sh.hidden = false; back.hidden = false;
     requestAnimationFrame(() => { sh.classList.add('on'); back.classList.add('on'); });
   }
@@ -339,6 +408,7 @@
     else S.results = [];
     if (my !== qSeq) return;
     if (S.view !== 'discover') S.view = 'discover';
+    fluid.jump(0);
     render();
   }
   qEl.addEventListener('keydown', (e) => {
