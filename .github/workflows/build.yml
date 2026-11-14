@@ -1,0 +1,124 @@
+name: Build & Release
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: node scripts/unit-test.js
+      - name: Package + sign (ad-hoc) + DMG
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: "false" }
+        run: |
+          set -e
+          npx electron-builder --mac dir --arm64 --publish never
+          APP=$(ls -d dist/mac*/Grab.app | head -1)
+          codesign --force --deep --sign - "$APP"
+          ( cd "$(dirname "$APP")" && ditto -c -k --sequesterRsrc --keepParent Grab.app ../Grab-mac-arm64.zip )
+          STAGE=$(mktemp -d); cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname Grab -srcfolder "$STAGE" -ov -format UDZO -quiet dist/Grab-mac-arm64.dmg
+          ls -la dist/*.dmg dist/*.zip
+      - name: Release gate (app really installs apps, and survives its own update)
+        run: |
+          set -e
+          APP=$(ls -d dist/mac*/Grab.app | head -1)
+          codesign --verify --deep --strict "$APP" && echo "✓ signature valid"
+          MNT=$(mktemp -d); hdiutil attach -nobrowse -quiet -mountpoint "$MNT" dist/Grab-mac-arm64.dmg
+          test -d "$MNT/Grab.app" && test -L "$MNT/Applications" && echo "✓ dmg has the app + Applications shortcut"
+          hdiutil detach -quiet "$MNT"
+          L=~/Library/Logs/Grab
+          rm -rf /Applications/Grab.app "$L"; ditto "$APP" /Applications/Grab.app
+          # 1. full self test: UI boots, catalog loads, search works, installs Rectangle (dmg) + AppCleaner (zip), finds them, uninstalls
+          set +e
+          GRAB_SELFTEST=1 /Applications/Grab.app/Contents/MacOS/Grab > selftest.out 2>&1 &
+          PID=$!
+          for i in $(seq 1 600); do kill -0 $PID 2>/dev/null || break; sleep 1; done
+          kill -0 $PID 2>/dev/null && { echo "✗ self test hung (FROZEN)"; kill -9 $PID; cat $L/grab.log; exit 1; }
+          wait $PID; CODE=$?
+          set -e
+          echo "----- grab.log"; cat $L/grab.log
+          [ "$CODE" = "0" ] && grep -q "SELFTEST PASS" $L/grab.log && echo "✓ self test passed" || { echo "✗ self test failed (exit $CODE)"; exit 1; }
+          grep -E "UNCAUGHT|UNHANDLED|renderer ERROR" $L/grab.log && { echo "✗ errors in log"; exit 1; } || echo "✓ no errors in log"
+          test -d /Applications/AppCleaner.app && echo "✓ AppCleaner really landed in /Applications"
+          # 2. self-update: swap itself for the freshly built zip, relaunch, and stay up
+          V=$(node -p "require('./package.json').version")
+          rm -f $L/grab.log $L/update.log
+          GRAB_SELFTEST=swap GRAB_UPDATE_ZIP="$PWD/dist/Grab-mac-arm64.zip" /Applications/Grab.app/Contents/MacOS/Grab >/dev/null 2>&1 &
+          P1=$!
+          for i in $(seq 1 90); do grep -q "launched OK" $L/update.log 2>/dev/null && break; sleep 1; done
+          grep -q "launched OK" $L/update.log && echo "✓ update swapped and relaunched" || { echo "✗ swap did not relaunch"; cat $L/update.log $L/grab.log; exit 1; }
+          sleep 15
+          P2=$(pgrep -f "/Applications/Grab.app/Contents/MacOS/Grab" | head -1)
+          [ -n "$P2" ] && [ "$P2" != "$P1" ] && echo "✓ new process after update (pid $P2) still running after 15s" || { echo "✗ app not running after update"; cat $L/update.log $L/grab.log; exit 1; }
+          [ "$(grep -c "boot $V" $L/grab.log)" -ge 2 ] && echo "✓ booted twice, version $V" || { echo "✗ expected two boots"; cat $L/grab.log; exit 1; }
+          grep -q "renderer ready" $L/grab.log && echo "✓ UI up after update"
+          grep -E "UNCAUGHT|UNHANDLED|renderer ERROR" $L/grab.log && { echo "✗ errors after update"; exit 1; } || echo "✓ no errors after update"
+          cat $L/update.log
+          kill $P2 || true
+          for f in dist/Grab-mac-arm64.dmg dist/Grab-mac-arm64.zip; do s=$(stat -f%z "$f"); [ "$s" -gt 50000000 ] && echo "✓ $f $s bytes" || { echo "✗ $f too small"; exit 1; }; done
+      - id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v${{ steps.v.outputs.version }}
+          name: Grab ${{ steps.v.outputs.version }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+          body: |
+            Grab ${{ steps.v.outputs.version }}: download any app without the browser.
+            Mac: download **Grab-mac-arm64.dmg**, drag Grab to Applications, then right-click it → Open the first time.
+            Windows: run **Grab-win-x64.exe** (if SmartScreen shows up: More info → Run anyway).
+
+  win:
+    runs-on: windows-latest
+    needs: mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: node scripts/unit-test.js
+      - run: npx electron-builder --win nsis --x64 --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: "false" }
+      - name: Release gate (installs, boots, loads the winget catalog, installs 7-Zip)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
+          if ($exe.Length -lt 50MB) { throw "installer too small: $($exe.Length)" }
+          Start-Process -FilePath $exe.FullName -ArgumentList '/S' -Wait
+          $app = "$env:LOCALAPPDATA\Programs\Grab\Grab.exe"
+          for ($i = 0; $i -lt 60 -and !(Test-Path $app); $i++) { Start-Sleep -Seconds 1 }
+          if (!(Test-Path $app)) { throw "silent install did not produce $app" }
+          Get-Process Grab -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          "✓ installed to $app"
+          winget --version
+          $log = "$env:APPDATA\Grab\logs\grab.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $env:GRAB_SELFTEST = '1'
+          $p = Start-Process -FilePath $app -PassThru
+          if (!$p.WaitForExit(900000)) { Stop-Process -Id $p.Id -Force; Get-Content $log; throw "self test hung (FROZEN)" }
+          "----- grab.log"; Get-Content $log
+          if ($p.ExitCode -ne 0 -or !(Select-String -Path $log -Pattern 'SELFTEST PASS' -Quiet)) { throw "self test failed (exit $($p.ExitCode))" }
+          if (Select-String -Path $log -Pattern 'UNCAUGHT|UNHANDLED|renderer ERROR' -Quiet) { throw "errors in log" }
+          "✓ Windows self test passed"
+      - id: v
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v${{ steps.v.outputs.version }}
+          files: dist/*.exe

@@ -1,0 +1,53 @@
+{
+  "name": "grab",
+  "productName": "Grab",
+  "version": "1.0.0",
+  "description": "Grab: search any app and install it in one click, straight from the official source. No browser, no fake download buttons.",
+  "main": "src/main.js",
+  "author": "Grab",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node scripts/unit-test.js"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "sql.js": "^1.12.0"
+  },
+  "build": {
+    "appId": "app.grab.store",
+    "productName": "Grab",
+    "files": [
+      "src/**",
+      "package.json",
+      "node_modules/sql.js/dist/sql-wasm.js",
+      "node_modules/sql.js/dist/sql-wasm.wasm",
+      "node_modules/sql.js/package.json"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": ["dmg", "zip"],
+      "hardenedRuntime": false,
+      "identity": null,
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "${productName}-win-${arch}.${ext}"
+    }
+  }
+}
