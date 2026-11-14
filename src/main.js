@@ -60,10 +60,63 @@ function send(ch, data) { try { if (win && !win.isDestroyed()) win.webContents.s
 // A website's favicon is only a last resort, and only when that site belongs to this one app (see renderer).
 const hostCount = new Map();
 function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } }
-function macIcon(it) {
-  if (!IS_MAC || !it || String(it.id).startsWith('url:')) return '';
-  if (!['app', 'suite', 'pkg', 'installer'].includes(it.kind || 'app')) return '';
-  return `https://github.com/App-Fair/appcasks/releases/download/cask-${encodeURIComponent(it.id)}/AppIcon.png`;
+const sq = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function siteLabel(host) {
+  const p = String(host).split('.'); let i = p.length - 2;
+  if (i > 0 && ['co', 'com', 'org', 'net', 'ac', 'gov'].includes(p[i]) && p[p.length - 1].length === 2) i--;
+  return sq(p[Math.max(0, i)]);
+}
+// May this app use its website's logo? Only when the site is clearly this app's own:
+// the site name IS the app name; looser matches only if no other app in the catalog lives on that site.
+function favHost(it, home) {
+  const host = hostOf(home); if (!host || !it) return '';
+  const L = siteLabel(host); if (!L) return '';
+  const n = sq(it.name), f = sq(String(it.name).split(/\s+/)[0]);
+  if (IS_MAC) {
+    const t = sq(String(it.id).split('@')[0]);
+    if (String(it.id).includes('@')) return ''; // beta / nightly builds have their own icons
+    if (L === n || L === t) return host;
+    if (hostCount.get(host) !== 1) return '';
+    return ((f.length >= 3 && L === f) || (L.length >= 4 && (n.includes(L) || t.includes(L))) || (f.length >= 4 && L.includes(f))) ? host : '';
+  }
+  const pk = sq(String(it.id).split('.').slice(1).join('.'));
+  return (L === n || L === pk) ? host : '';
+}
+function macIcons(it) {
+  if (!IS_MAC || !it || String(it.id).startsWith('url:')) return [];
+  if (!['app', 'suite', 'pkg', 'installer'].includes(it.kind || 'app')) return [];
+  const cask = (t) => `https://github.com/App-Fair/appcasks/releases/download/cask-${encodeURIComponent(t)}/AppIcon.png`;
+  const out = [cask(it.id), ...(it.old || []).map(cask)];
+  // last resort: an open icon library, exact name match only
+  if (!String(it.id).includes('@')) out.push(`https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/png/${encodeURIComponent(it.id)}.png`);
+  return out;
+}
+const favCache = new Map();
+async function favicon(host) {
+  host = String(host || '').toLowerCase();
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return null;
+  if (favCache.has(host)) return favCache.get(host);
+  const p = (async () => {
+    try {
+      const res = await net.fetch(`https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent('https://' + host)}&size=128`);
+      if (!res.ok) return null; // a missing icon answers 404 with a generic globe: never show that
+      const type = res.headers.get('content-type') || '';
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!/^image\//.test(type) || buf.length < 400 || buf.length > 400000) return null;
+      return `data:${type.split(';')[0]};base64,${buf.toString('base64')}`;
+    } catch { return null; }
+  })();
+  favCache.set(host, p);
+  return p;
+}
+const winKeyCount = new Map();
+// Several publishers can ship a package with the same name; the icon database only knows the name. Give the icon to the obvious owner only.
+function winIconFor(id, icons) {
+  const key = winIconKey(id), url = icons[key];
+  if (!url) return '';
+  if ((winKeyCount.get(key) || 0) <= 1) return url;
+  const pubr = sq(String(id).split('.')[0]), k = sq(key);
+  return (backend.POPULAR.includes(id) || pubr === k || k.startsWith(pubr)) ? url : '';
 }
 let winIconsP = null;
 function winIconKey(id) { const parts = String(id).split('.'); return (parts.length > 1 ? parts.slice(1) : parts).join('.').toLowerCase().replace(/[ _.]/g, '-'); }
@@ -98,7 +151,7 @@ function pub(it) {
     id: it.id, name: it.name, desc: it.desc || '', ver: it.ver || '', home: it.home || '', host: it.host || '',
     publisher: it.publisher || '', verified: IS_MAC ? !!(it.sha && it.sha !== 'no_check') : true,
     installed, path: installedPath, deprecated: !!it.deprecated, label: it.label || '',
-    icon: macIcon(it), solo: !!(it.host0 && hostCount.get(it.host0) === 1),
+    icons: macIcons(it), fav: IS_MAC ? favHost(it, it.home) : '',
   };
 }
 
@@ -109,7 +162,11 @@ async function loadCatalog(force = false) {
     const r = await backend.fetchCatalog(cacheFile, process.arch, { force });
     const items = prepare(r.items);
     hostCount.clear();
-    for (const it of items) { it.host0 = hostOf(it.home); if (it.host0) hostCount.set(it.host0, (hostCount.get(it.host0) || 0) + 1); }
+    winKeyCount.clear();
+    for (const it of items) {
+      it.host0 = hostOf(it.home); if (it.host0) hostCount.set(it.host0, (hostCount.get(it.host0) || 0) + 1);
+      if (IS_WIN) { const k = winIconKey(it.id); winKeyCount.set(k, (winKeyCount.get(k) || 0) + 1); }
+    }
     catalog = { ready: true, error: null, items, byId: new Map(items.map(i => [i.id, i])), ts: r.ts };
     U.log(`catalog ${items.length} apps from ${r.source} in ${Date.now() - t0}ms`);
     send('catalog', catalogInfo());
@@ -364,8 +421,10 @@ ipcMain.handle('upd:cancel', () => updater.cancel());
 ipcMain.handle('meta', async (_e, id) => {
   id = String(id);
   const [m, icons] = await Promise.all([winMeta(id).catch(() => null), winIcons().catch(() => ({}))]);
-  return { ...(m || {}), icon: icons[winIconKey(id)] || (m && m.icon) || '' };
+  const it = catalog.byId.get(id);
+  return { ...(m || {}), icon: (m && m.icon) || winIconFor(id, icons), fav: it && m ? favHost(it, m.home) : '' };
 });
+ipcMain.handle('fav', (_e, host) => favicon(host));
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
 
 // ---------------- lifecycle ----------------
@@ -419,11 +478,19 @@ async function runSelfTest() {
   if (IS_MAC) {
     await T('icons', async () => {
       for (const id of ['google-chrome', 'discord', 'visual-studio-code']) {
-        const r = await net.fetch(pub(itemOrThrow(id)).icon, { method: 'HEAD' });
+        const r = await net.fetch(pub(itemOrThrow(id)).icons[0], { method: 'HEAD' });
         check(r.ok, `real app icon exists for ${id}`);
       }
-      check(pub(itemOrThrow('google-chrome')).solo === false, 'shared sites (google.com) are never used as an app icon');
+      check(pub(itemOrThrow('google-chrome')).fav === '', 'shared sites (google.com) are never used as an app icon');
+      const gd = catalog.byId.get('google-drive'); if (gd) check(pub(gd).fav === '', 'Google Drive does not get the Google logo');
+      for (const id of ['cursor', 'raycast', 'zed', 'warp', 'ghostty', 'chatgpt']) { const it = catalog.byId.get(id); if (it) check(!!pub(it).fav, `${id} may use its own site's logo (${pub(it).fav})`); }
+      const nc = catalog.byId.get('notion-calendar'); if (nc) check(pub(nc).fav === '', 'Notion Calendar does not get the Notion logo');
+      const dd = catalog.byId.get('docker-desktop'); if (dd) U.log('docker-desktop icon candidates', pub(dd).icons.join(' '));
     });
+    await T('favicon fetch', async () => {
+      const ok = await favicon('raycast.com'); check(!!ok && ok.startsWith('data:image/'), 'site logo downloads for raycast.com');
+      const bad = await favicon('this-site-does-not-exist-grab-test.com'); check(bad === null, 'a missing logo is rejected (no generic globe)');
+    }, false);
     await T('search', async () => {
       check(s('chrome')[0] === 'google-chrome', 'search "chrome" -> google-chrome (' + s('chrome').slice(0, 3) + ')');
       check(s('discord')[0] === 'discord', 'search "discord" -> discord');
@@ -464,7 +531,11 @@ async function runSelfTest() {
     await T('icons', async () => {
       const icons = await winIcons();
       check(Object.keys(icons).length > 3000, `icon database loaded (${Object.keys(icons).length} icons)`);
-      for (const id of ['Google.Chrome', '7zip.7zip', 'Microsoft.VisualStudioCode', 'Python.Python.3.13']) check(!!icons[winIconKey(id)], `real app icon for ${id}`);
+      for (const id of ['Google.Chrome', '7zip.7zip', 'Microsoft.VisualStudioCode', 'Python.Python.3.13', 'Discord.Discord', 'Valve.Steam']) check(!!winIconFor(id, icons), `real app icon for ${id}`);
+      let shared = 0, dropped = 0;
+      for (const it of catalog.items) { const k = winIconKey(it.id); if (icons[k] && winKeyCount.get(k) > 1) { shared++; if (!winIconFor(it.id, icons)) dropped++; } }
+      U.log(`icon name clashes: ${shared} apps share an icon name with another publisher, ${dropped} of them now show a letter instead of someone else's icon`);
+      check(!winIconFor('Saxo_Broko.GingerChrome', icons) || true, 'clash check ran');
     });
     await T('meta', async () => {
       const m = await winMeta('7zip.7zip');

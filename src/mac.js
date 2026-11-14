@@ -69,6 +69,7 @@ function slimCask(c, arch) {
     name: (Array.isArray(c.name) && c.name[0]) || c.token,
     desc: c.desc || '',
     aka: Array.isArray(c.name) ? c.name.slice(1).join('|') : '',
+    old: Array.isArray(c.old_tokens) ? c.old_tokens.slice(0, 4) : [],
     home: c.homepage || '',
     ver: String(ver || ''),
     url, sha: sha || 'no_check', host,
@@ -94,7 +95,7 @@ function slimAll(raw, arch) {
 async function fetchCatalog(cacheFile, arch, { force = false } = {}) {
   let cached = null;
   try { cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch {}
-  const fresh = cached && cached.items && cached.items.length > 1000 && Date.now() - cached.ts < 12 * 3600e3 && cached.arch === arch && cached.v === 3;
+  const fresh = cached && cached.items && cached.items.length > 1000 && Date.now() - cached.ts < 12 * 3600e3 && cached.arch === arch && cached.v === 4;
   if (fresh && !force) return { items: cached.items, ts: cached.ts, source: 'cache' };
   try {
     const f = globalThis.__grabFetch || globalThis.fetch;
@@ -103,7 +104,7 @@ async function fetchCatalog(cacheFile, arch, { force = false } = {}) {
     const raw = await res.json();
     const items = slimAll(raw, arch);
     if (items.length < 1000) throw new Error('catalog too small: ' + items.length);
-    const data = { v: 3, ts: Date.now(), arch, items };
+    const data = { v: 4, ts: Date.now(), arch, items };
     try { fs.writeFileSync(cacheFile, JSON.stringify(data)); } catch (e) { log('catalog cache write failed', e); }
     return { items, ts: data.ts, source: 'network' };
   } catch (e) {

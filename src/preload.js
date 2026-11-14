@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('grab', {
   updInstall: call('upd:install'),
   updCancel: call('upd:cancel'),
   meta: call('meta'),
+  fav: call('fav'),
   ready: call('ready'),
   onCatalog: on('catalog'),
   onJob: on('job'),
