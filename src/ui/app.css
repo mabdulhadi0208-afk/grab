@@ -235,3 +235,19 @@ kbd { font-family: inherit; font-weight: 600; font-size: 11px; line-height: 1; c
 .kindp { font-size: 10.5px; height: 20px; padding: 0 8px; margin-right: auto; margin-left: 8px; }
 .scrollbar-glow { position: absolute; right: 3px; top: 0; width: 3px; border-radius: 3px; background: var(--grad); opacity: 0; transition: opacity .4s; z-index: 4; pointer-events: none; }
 .main.scrolling .scrollbar-glow { opacity: .9; }
+
+/* ===== springs & jelly ===== */
+.rv { transition: opacity .8s var(--ease), transform var(--jelly-ms, 1s) var(--bouncy, var(--spring)), filter .8s var(--ease), background .25s var(--ease), border-color .25s var(--ease), box-shadow .35s var(--ease); }
+.card.rv.on:hover { transition: transform .7s var(--jelly, var(--spring)), background .25s, border-color .25s, box-shadow .35s; }
+.nav-ind { transition: transform .75s var(--jelly, var(--spring)), height .4s var(--ease); }
+.mag { transition: transform .8s var(--jelly, var(--spring)), background .25s var(--ease), box-shadow .3s var(--ease), filter .2s; }
+.sheet { transition: transform .8s var(--bouncy, var(--ease)); }
+.sheet.on .head .ic { animation: popIn .9s var(--jelly, var(--spring)) .12s both; }
+@keyframes popIn { from { scale: .4; rotate: -14deg; opacity: 0; } }
+.badge { transition: transform .6s var(--jelly, var(--spring)); }
+.btn.prog .fill { transition: width .45s var(--soft, linear); }
+.self-card .self-bar i { transition: width .45s var(--soft, linear); }
+.self-card:not([hidden]) { animation: none; }
+.hero h1 .w { animation: wIn 1.1s var(--jelly, var(--spring)) forwards; animation-delay: calc(var(--i) * 85ms); }
+.ic { transform-origin: 50% 60%; }
+.search { transform-origin: 50% 50%; }

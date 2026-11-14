@@ -44,34 +44,120 @@
     const name = (it.name || '?').trim();
     const ch = (name.match(/[A-Za-z0-9]/) || [name[0] || '?'])[0].toUpperCase();
     const h = hue(it.id || name);
-    return `<div class="ic" data-home="${esc(it.home || '')}" data-path="${esc(it.path || '')}"><div class="letter" style="background:linear-gradient(135deg,hsl(${h} 70% 58%),hsl(${(h + 40) % 360} 75% 45%))">${esc(ch)}</div><img alt=""></div>`;
+    return `<div class="ic" data-id="${esc(it.id || '')}" data-home="${esc(it.home || '')}" data-path="${esc(it.path || '')}"><div class="letter" style="background:linear-gradient(135deg,hsl(${h} 70% 58%),hsl(${(h + 40) % 360} 75% 45%))">${esc(ch)}</div><img alt=""></div>`;
   }
-  function favUrl(home) {
-    let origin = home;
-    try { origin = new URL(home).origin; } catch { return null; }
-    return `https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent(origin)}&size=128`;
+  // Icon sources, best first: winget's own icon, GitHub owner avatar (for GitHub-hosted apps), Google's favicon service, DuckDuckGo, Google s2.
+  const metaCache = new Map();
+  const iconMem = (() => { try { return JSON.parse(localStorage.getItem('grab-icons') || '{}'); } catch { return {}; } })();
+  let iconMemT = null;
+  function iconRemember(id, url) { if (!id) return; iconMem[id] = url; clearTimeout(iconMemT); iconMemT = setTimeout(() => { try { localStorage.setItem('grab-icons', JSON.stringify(iconMem)); } catch {} }, 800); }
+  function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } }
+  function iconSources(homes, direct) {
+    const out = [];
+    if (direct) out.push([direct, 16]);
+    for (const home of homes) {
+      if (!home) continue;
+      const host = hostOf(home);
+      if (!host) continue;
+      const gh = /^https?:\/\/(?:www\.)?github\.com\/([^/?#]+)/i.exec(home);
+      if (gh) { out.push([`https://github.com/${gh[1]}.png?size=128`, 32]); continue; }
+      const gl = /^(?:[^.]+\.)?(github\.io|sourceforge\.net|gitlab\.com)$/.exec(host);
+      if (gl && host.endsWith('github.io')) { out.push([`https://github.com/${host.split('.')[0]}.png?size=128`, 32]); continue; }
+      out.push([`https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent('https://' + host)}&size=128`, 32]);
+      const root = host.split('.').slice(-2).join('.');
+      if (root !== host) out.push([`https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent('https://' + root)}&size=128`, 32]);
+      out.push([`https://icons.duckduckgo.com/ip3/${host}.ico`, 16]);
+    }
+    const seen = new Set();
+    return out.filter(([u]) => !seen.has(u) && seen.add(u));
+  }
+  function loadChain(box, img, srcs, id) {
+    if (!srcs.length) { iconRemember(id, 'none'); return; }
+    const [u, min] = srcs.shift();
+    img.onload = () => {
+      if (img.naturalWidth >= min) { img.classList.add('on'); box.classList.add('has-img'); iconRemember(id, u); jellyIn(box); }
+      else loadChain(box, img, srcs, id);
+    };
+    img.onerror = () => loadChain(box, img, srcs, id);
+    img.src = u;
   }
   function hydrateIcons(root = document) {
     for (const box of $$('.ic:not([data-h])', root)) {
       box.dataset.h = '1';
       const img = $('img', box);
-      const p = box.dataset.path, home = box.dataset.home;
+      const p = box.dataset.path, home = box.dataset.home, id = box.dataset.id;
       const setReal = (url) => { img.className = 'real on'; img.src = url; box.classList.add('has-img', 'has-real'); };
       if (p) {
         if (realIcons.has(p)) { setReal(realIcons.get(p)); continue; }
-        G.icon(p).then(u => { if (u) { realIcons.set(p, u); setReal(u); } else tryFav(); });
+        G.icon(p).then(u => { if (u) { realIcons.set(p, u); setReal(u); jellyIn(box); } else start(); });
         continue;
       }
-      tryFav();
-      function tryFav() {
-        const u = home && favUrl(home);
-        if (!u || favState.get(home) === 'bad') return;
-        img.onload = () => { if (img.naturalWidth >= 32) { favState.set(home, 'ok'); img.classList.add('on'); box.classList.add('has-img'); } else { favState.set(home, 'bad'); img.remove(); } };
-        img.onerror = () => { favState.set(home, 'bad'); img.remove(); };
-        img.src = u;
+      start();
+      async function start() {
+        let homes = [home], direct = '';
+        if (!isMac() && id && !id.startsWith('url:')) {
+          let m = metaCache.get(id);
+          if (m === undefined) { m = await G.meta(id).catch(() => null); metaCache.set(id, m); }
+          if (m) {
+            homes = [m.home, m.pub, home]; direct = m.icon || '';
+            if (m.desc) { const card = box.closest('[data-open]'); const d = card && $('.desc', card); if (d && !d.dataset.meta) { d.dataset.meta = '1'; d.textContent = m.desc; } const it = S.items.get(id); if (it) { it.mdesc = m.desc; it.mhome = m.home; } }
+          }
+        }
+        const known = id && iconMem[id];
+        if (known === 'none') return;
+        if (known) {
+          img.onload = () => { img.classList.add('on'); box.classList.add('has-img'); };
+          img.onerror = () => { delete iconMem[id]; loadChain(box, img, iconSources(homes, direct), id); };
+          img.src = known; return;
+        }
+        loadChain(box, img, iconSources(homes, direct), id);
       }
     }
   }
+
+  // ---------- springs & jelly ----------
+  // Real spring curves as CSS linear() easings (damped harmonic oscillator, sampled).
+  function springEasing(stiffness, damping, mass = 1) {
+    const w0 = Math.sqrt(stiffness / mass), z = damping / (2 * Math.sqrt(stiffness * mass));
+    const wd = w0 * Math.sqrt(Math.max(0, 1 - z * z));
+    const x = (t) => z < 1 ? 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + (z * w0 / wd) * Math.sin(wd * t)) : 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+    let T = 0; while (T < 10 && !(Math.abs(1 - x(T)) < 0.001 && Math.abs(1 - x(T + 0.05)) < 0.001)) T += 0.02;
+    const pts = []; for (let i = 0; i <= 60; i++) pts.push(+x((i / 60) * T).toFixed(4));
+    pts[60] = 1;
+    return { css: `linear(${pts.join(', ')})`, ms: Math.round(T * 1000) };
+  }
+  const SP = { jelly: springEasing(260, 11), bouncy: springEasing(200, 16), soft: springEasing(170, 24) };
+  const RS = document.documentElement.style;
+  RS.setProperty('--jelly', SP.jelly.css); RS.setProperty('--bouncy', SP.bouncy.css); RS.setProperty('--soft', SP.soft.css);
+  const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Squash-and-stretch wobble using the independent `scale` property, so it never fights transforms (hover, magnet, skew).
+  function jelly(el, k = 1) {
+    if (!el || REDUCE || !el.animate) return;
+    const a = 0.12 * k;
+    el.animate([
+      { scale: '1 1' }, { scale: `${1 + a} ${1 - a}` }, { scale: `${1 - a * 0.75} ${1 + a * 0.75}` },
+      { scale: `${1 + a * 0.4} ${1 - a * 0.4}` }, { scale: `${1 - a * 0.18} ${1 + a * 0.18}` }, { scale: '1 1' },
+    ], { duration: 640, easing: 'cubic-bezier(.3,.7,.4,1)' });
+  }
+  function jellyIn(el) {
+    if (!el || REDUCE || !el.animate) return;
+    el.animate([{ scale: '.6 .6', opacity: 0 }, { scale: '1 1', opacity: 1 }], { duration: SP.jelly.ms, easing: SP.jelly.css });
+  }
+  // press = squish, release = wobble back
+  const PRESS = '.btn, .card, .rowi, .nav-btn, .chip, .clear, .search, .self-card';
+  document.addEventListener('pointerdown', (e) => {
+    const el = e.target.closest(PRESS); if (!el || REDUCE || !el.animate) return;
+    el._press = el.animate([{ scale: '1 1' }, { scale: el.matches('.btn, .chip, .clear') ? '1.06 .9' : '.975 .965' }], { duration: 140, easing: 'ease-out', fill: 'forwards' });
+    const up = () => { removeEventListener('pointerup', up); removeEventListener('pointercancel', up); try { el._press && el._press.cancel(); } catch {} jelly(el, el.matches('.btn, .chip') ? 1.1 : 0.45); };
+    addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  });
+  // icons wobble when you hover their card
+  document.addEventListener('pointerover', (e) => {
+    const c = e.target.closest('.card, .rowi'); if (!c || c.contains(e.relatedTarget)) return;
+    const ic = $('.ic', c); if (!ic || REDUCE || !ic.animate) return;
+    ic.animate([{ rotate: '0deg', scale: '1 1' }, { rotate: '-8deg', scale: '1.1 .92' }, { rotate: '6deg', scale: '.95 1.07' }, { rotate: '-3deg', scale: '1.03 .98' }, { rotate: '0deg', scale: '1 1' }], { duration: 700, easing: 'ease-out' });
+  });
+  $('#q').addEventListener('focus', () => jelly($('#search-wrap'), 0.35));
 
   // ---------- action button ----------
   function actionHTML(it, extraClass = '') {
@@ -102,7 +188,7 @@
         b.className = nb.className; b.title = nb.title;
         $('.fill', b).style.width = $('.fill', nb).style.width;
         $('span', b).textContent = $('span', nb).textContent;
-      } else { b.replaceWith(nb); fluid.magnet(nb.parentElement); }
+      } else { b.replaceWith(nb); fluid.magnet(nb.parentElement); if (nb.matches('.btn-ok, .btn-warn, .btn-bad')) jelly(nb, 1.5); }
     }
   }
 
@@ -110,14 +196,16 @@
   const fluid = (() => {
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const main = $('.main'), blob = $('#blob'), glow = $('#sglow');
-    let target = 0, cur = 0, wheeling = false, vel = 0, lastTop = 0, idle = 0;
+    let target = 0, cur = 0, wheeling = false, vel = 0, lastTop = 0, idle = 0, over = 0, overV = 0, overShown = 0;
     const maxScroll = () => Math.max(0, view.scrollHeight - view.clientHeight);
     view.addEventListener('wheel', (e) => {
       if (reduce || e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
       e.preventDefault();
       if (!wheeling) { cur = target = view.scrollTop; }
       const d = e.deltaY * (e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? view.clientHeight : 1);
-      target = Math.max(0, Math.min(maxScroll(), target + d));
+      const raw = target + d;
+      if (raw < 0 || raw > maxScroll()) over = Math.max(-140, Math.min(140, over + (raw < 0 ? -d : -d) * 0.35 * (1 - Math.abs(over) / 160)));
+      target = Math.max(0, Math.min(maxScroll(), raw));
       wheeling = true;
     }, { passive: false });
     // keyboard / scrollbar drags take over instantly
@@ -138,6 +226,10 @@
       }
       const top = view.scrollTop;
       vel += ((top - lastTop) - vel) * 0.2; lastTop = top;
+      // rubber band: overscroll stretches the content, then springs back with a little jiggle
+      overV += (-over * 0.12); overV *= 0.68; over += overV;
+      if (Math.abs(over) < 0.05 && Math.abs(overV) < 0.05) over = overV = 0;
+      if (over !== overShown) { overShown = over; const vi = view.firstElementChild; if (vi) { vi.style.transform = over ? `translateY(${over.toFixed(2)}px)` : ''; vi.style.transformOrigin = over > 0 ? '50% 0' : '50% 100%'; vi.style.scale = over ? `1 ${(1 + Math.abs(over) / 2400).toFixed(4)}` : ''; } }
       const sk = reduce ? 0 : Math.max(-2.2, Math.min(2.2, vel * -0.06));
       view.style.setProperty('--sk', sk.toFixed(3) + 'deg');
       if (Math.abs(vel) > 0.5) { main.classList.add('scrolling'); idle = 0; } else if (++idle > 30) main.classList.remove('scrolling');
@@ -168,7 +260,12 @@
     }
     function nav() {
       const a = $('.nav-btn.active'), ind = $('#nav-ind');
-      if (a) { ind.style.transform = `translateY(${a.offsetTop}px)`; ind.style.height = a.offsetHeight + 'px'; }
+      if (a) {
+        const prev = ind._y, y = a.offsetTop;
+        ind.style.transform = `translateY(${y}px)`; ind.style.height = a.offsetHeight + 'px';
+        if (prev != null && prev !== y && ind.animate && !REDUCE) ind.animate([{ scale: '1 1' }, { scale: `.94 ${1 + Math.min(.6, Math.abs(y - prev) / 120)}` }, { scale: '1.04 .9' }, { scale: '1 1' }], { duration: 620, easing: 'ease-out' });
+        ind._y = y;
+      }
     }
     function jump(y) { wheeling = false; target = cur = y; view.scrollTop = y; }
     return { reveal, counters, nav, magnet, jump };
@@ -288,9 +385,9 @@
 
   function badges() {
     const nUp = S.scan ? S.scan.filter(s => s.update && !(S.jobsByItem.get(s.id) && S.jobsByItem.get(s.id).state === 'done')).length : 0;
-    const bu = $('#badge-updates'); bu.textContent = nUp; bu.classList.toggle('show', nUp > 0);
+    const bu = $('#badge-updates'); if (bu.textContent !== String(nUp) && nUp) jelly(bu, 2); bu.textContent = nUp; bu.classList.toggle('show', nUp > 0);
     const nDl = [...S.jobsById.values()].filter(j => ['queued', 'downloading', 'installing', 'needs-quit'].includes(j.state)).length;
-    const bd = $('#badge-downloads'); bd.textContent = nDl; bd.classList.toggle('show', nDl > 0);
+    const bd = $('#badge-downloads'); if (bd.textContent !== String(nDl) && nDl) jelly(bd, 2); bd.textContent = nDl; bd.classList.toggle('show', nDl > 0);
   }
   function foot() {
     const f = $('#side-foot');
@@ -340,7 +437,7 @@
     const t = document.createElement('div');
     t.className = 'toast' + (bad ? ' bad' : '');
     t.innerHTML = (bad ? I.x : I.check) + `<span>${esc(msg)}</span>`;
-    $('#toasts').appendChild(t);
+    $('#toasts').appendChild(t); jellyIn(t); setTimeout(() => jelly(t, 0.8), 60);
     setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, bad ? 6000 : 3800);
   }
 
@@ -444,14 +541,24 @@
     if (S.view === 'downloads') patchDownloadRow(j);
     else if ((S.view === 'updates' || S.view === 'installed') && j.state === 'done' && (!prev || prev.state !== 'done')) render();
   });
-  G.onSelf((r) => { $('#self-ver').textContent = r.version; $('#self-card').hidden = false; });
-  G.onSelfProgress((p) => { $('#self-fill').style.width = Math.round(p * 100) + '%'; });
-  $('#self-btn').addEventListener('click', async () => {
-    const card = $('#self-card'), btn = $('#self-btn');
-    card.classList.add('busy'); btn.disabled = true; btn.textContent = 'Downloading';
-    try { await G.selfApply(); btn.textContent = 'Restarting'; }
-    catch (e) { card.classList.remove('busy'); btn.disabled = false; btn.textContent = 'Update Grab'; toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true); }
-  });
+  // ---------- auto update card (Surge-style) ----------
+  function renderUpd(u) {
+    if (!u) return;
+    const card = $('#self-card'), btn = $('#self-btn'), title = $('#self-title'), fill = $('#self-fill');
+    const show = ['downloading', 'unpacking', 'ready', 'installing'].includes(u.status) || (u.status === 'available');
+    if (show && card.hidden) { card.hidden = false; jelly(card, 1.2); }
+    if (!show && !card.hidden && u.status !== 'error') card.hidden = true;
+    const v = ver => String(ver || '').replace(/^v/, '');
+    card.classList.toggle('busy', ['downloading', 'unpacking', 'available'].includes(u.status));
+    fill.style.width = (u.status === 'ready' ? 100 : u.progress || 0) + '%';
+    if (u.status === 'ready') { title.innerHTML = `Grab ${esc(v(u.latest))} is ready`; btn.textContent = 'Restart to update'; btn.disabled = false; if (!card.dataset.ready) { card.dataset.ready = 1; jelly(btn, 1.4); } }
+    else if (u.status === 'installing') { title.textContent = 'Updating'; btn.textContent = 'Restarting'; btn.disabled = true; }
+    else if (u.status === 'unpacking') { title.innerHTML = `Getting Grab ${esc(v(u.latest))} ready`; btn.textContent = 'Almost there'; btn.disabled = true; }
+    else { title.innerHTML = `Downloading Grab ${esc(v(u.latest))}`; btn.textContent = `${u.progress || 0}%`; btn.disabled = true; }
+    if (u.justUpdated && !S.greeted) { S.greeted = true; setTimeout(() => toast(`Updated to Grab ${u.justUpdated}`), 900); }
+  }
+  G.onUpdater(renderUpd);
+  $('#self-btn').addEventListener('click', () => G.updInstall());
 
   // ---------- boot ----------
   (async () => {
@@ -463,6 +570,7 @@
     for (const j of await G.jobs()) { S.jobsById.set(j.id, j); S.jobsByItem.set(j.itemId, j); }
     foot(); render(); badges();
     G.scan(false).then(list => { if (list && list.length) { S.scan = remember(list); for (const s of list) S.installed.add(s.id); badges(); if (S.view !== 'discover') render(); else for (const s of list) refreshActions(s.id); } }).catch(() => {});
+    G.updState().then(renderUpd).catch(() => {});
     G.ready();
   })().catch(e => { console.error('boot failed', e); G.ready(); });
 })();

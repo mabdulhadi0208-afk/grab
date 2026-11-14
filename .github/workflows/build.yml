@@ -62,6 +62,7 @@ jobs:
           [ -n "$P2" ] && [ "$P2" != "$P1" ] && echo "✓ new process after update (pid $P2) still running after 15s" || { echo "✗ app not running after update"; cat $L/update.log $L/grab.log; exit 1; }
           [ "$(grep -c "boot $V" $L/grab.log)" -ge 2 ] && echo "✓ booted twice, version $V" || { echo "✗ expected two boots"; cat $L/grab.log; exit 1; }
           [ "$(grep -c "swapping" $L/update.log)" = "1" ] && echo "✓ swapped exactly once (no update loop)" || { echo "✗ update ran more than once"; cat $L/update.log; exit 1; }
+          grep -q "updater: updated to $V" $L/grab.log && echo "✓ new copy knows it was just updated" || { echo "✗ just-updated marker not picked up"; cat $L/grab.log; exit 1; }
           grep -q "renderer ready" $L/grab.log && echo "✓ UI up after update"
           grep -E "UNCAUGHT|UNHANDLED|renderer ERROR" $L/grab.log && { echo "✗ errors after update"; exit 1; } || echo "✓ no errors after update"
           cat $L/update.log

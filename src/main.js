@@ -235,61 +235,34 @@ function uniqueDest(p) {
   return p;
 }
 
-// ---------------- self update ----------------
-let selfUpdate = null;
-async function checkSelfUpdate() {
-  try {
-    const res = await net.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Grab' } });
-    if (!res.ok) return { available: false };
-    const rel = await res.json();
-    const v = String(rel.tag_name || '').replace(/^v/, '');
-    const want = IS_MAC ? `Grab-mac-${process.arch}.zip` : `Grab-win-x64.exe`;
-    const asset = (rel.assets || []).find(a => a.name === want);
-    if (v && asset && U.cmpVer(v, app.getVersion()) > 0) {
-      selfUpdate = { version: v, url: asset.browser_download_url };
-      U.log('self update available', v);
-      return { available: true, version: v };
-    }
-  } catch (e) { U.log('self update check failed', e.message); }
-  return { available: false };
-}
+// ---------------- auto update (Surge-style, see updater.js) ----------------
+const updater = require('./updater');
 
-async function applySelfUpdate(localFile) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grab-self-'));
-  let file = localFile;
-  if (!file) {
-    if (!selfUpdate) throw new Error('No update');
-    file = path.join(tmp, path.basename(new URL(selfUpdate.url).pathname));
-    await U.download(selfUpdate.url, file, { onProgress: (p) => send('self-progress', p.total ? p.received / p.total : 0) });
-  }
-  if (IS_MAC) {
-    const bundle = path.resolve(app.getPath('exe'), '..', '..', '..');
-    if (!bundle.endsWith('.app')) throw new Error('Not running from an app bundle');
-    try { fs.accessSync(path.dirname(bundle), fs.constants.W_OK); fs.accessSync(bundle, fs.constants.W_OK); }
-    catch { shell.openExternal(`https://github.com/${REPO}/releases/latest`); throw new Error('Grab is in a protected folder. Opened the download page instead.'); }
-    const x = path.join(tmp, 'x');
-    fs.mkdirSync(x);
-    const r = await U.run('/usr/bin/ditto', ['-x', '-k', file, x], { timeout: 300000 });
-    const newApp = path.join(x, 'Grab.app');
-    if (r.code !== 0 || !fs.existsSync(path.join(newApp, 'Contents', 'MacOS'))) throw new Error('Update package is damaged');
-    const logf = path.join(app.getPath('logs'), 'update.log');
-    const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
-    const script = [
-      `while kill -0 ${process.pid} 2>/dev/null; do sleep 0.3; done`,
-      `echo "$(date) swapping" >> ${q(logf)}`,
-      `rm -rf ${q(bundle + '.old')}`,
-      `if mv ${q(bundle)} ${q(bundle + '.old')} && /usr/bin/ditto ${q(newApp)} ${q(bundle)}; then rm -rf ${q(bundle + '.old')}; echo "$(date) swapped" >> ${q(logf)}; else rm -rf ${q(bundle)}; mv ${q(bundle + '.old')} ${q(bundle)}; echo "$(date) swap FAILED, restored" >> ${q(logf)}; fi`,
-      `/usr/bin/xattr -dr com.apple.quarantine ${q(bundle)} 2>/dev/null`,
-      `/usr/bin/env -u GRAB_SELFTEST -u GRAB_UPDATE_ZIP /usr/bin/open -n ${q(bundle)} && echo "$(date) launched OK" >> ${q(logf)}`,
-      `rm -rf ${q(tmp)}`,
-    ].join('\n');
-    spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore' }).unref();
-    U.log('self update: handing over to swap script');
-    setTimeout(() => app.exit(0), 200);
-  } else {
-    spawn(file, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref();
-    setTimeout(() => app.exit(0), 300);
-  }
+// ---------------- Windows app details (homepage, description, icon) from the winget manifests, fetched lazily ----------------
+const metaFile = () => path.join(app.getPath('userData'), 'meta-win.json');
+let metaCache = null, metaSaveT = null, metaActive = 0;
+const metaWait = [];
+function metaLoad() { if (!metaCache) { try { metaCache = JSON.parse(fs.readFileSync(metaFile(), 'utf8')); } catch { metaCache = {}; } } return metaCache; }
+function metaSave() { clearTimeout(metaSaveT); metaSaveT = setTimeout(() => { try { fs.writeFileSync(metaFile(), JSON.stringify(metaCache)); } catch {} }, 1500); }
+function yamlField(txt, key) { const m = new RegExp('^' + key + ':\\s*(.+)$', 'm').exec(txt); return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : ''; }
+async function winMeta(id) {
+  const it = catalog.byId.get(id);
+  if (!it || IS_MAC) return null;
+  const c = metaLoad();
+  if (c[id] && c[id].v === it.ver) return c[id];
+  while (metaActive >= 6) await new Promise(r => metaWait.push(r));
+  metaActive++;
+  try {
+    const base = `https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/${id[0].toLowerCase()}/${id.split('.').join('/')}/${encodeURIComponent(it.ver)}/${id}`;
+    let txt = '';
+    for (const suf of ['.locale.en-US.yaml', '.yaml']) {
+      try { const r = await net.fetch(base + suf); if (r.ok) { txt = await r.text(); if (/PackageName|ShortDescription|PackageUrl/.test(txt)) break; } } catch {}
+    }
+    const icon = (/IconUrl:\s*(https?:\S+)/.exec(txt) || [])[1] || '';
+    const m = { v: it.ver, home: yamlField(txt, 'PackageUrl') || yamlField(txt, 'PublisherUrl'), pub: yamlField(txt, 'PublisherUrl'), desc: yamlField(txt, 'ShortDescription'), icon };
+    c[id] = m; metaSave();
+    return m;
+  } finally { metaActive--; const n = metaWait.shift(); if (n) n(); }
 }
 
 // Real app icons for installed apps. Mac: read the bundle's .icns and convert with sips (no Electron icon APIs).
@@ -347,8 +320,11 @@ ipcMain.handle('openPath', (_e, p) => { if (typeof p === 'string' && fs.existsSy
 ipcMain.handle('reveal', (_e, p) => { if (typeof p === 'string' && fs.existsSync(p)) shell.showItemInFolder(p); });
 ipcMain.handle('external', (_e, url) => { if (/^https?:\/\//i.test(String(url))) shell.openExternal(String(url)); });
 ipcMain.handle('icon', (_e, p) => appIcon(p));
-ipcMain.handle('self:check', () => checkSelfUpdate());
-ipcMain.handle('self:apply', () => applySelfUpdate());
+ipcMain.handle('upd:state', () => updater.state());
+ipcMain.handle('upd:check', () => updater.check(true));
+ipcMain.handle('upd:install', () => updater.install());
+ipcMain.handle('upd:cancel', () => updater.cancel());
+ipcMain.handle('meta', (_e, id) => winMeta(String(id)).catch(() => null));
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
 
 // ---------------- lifecycle ----------------
@@ -359,7 +335,7 @@ app.on('activate', () => { if (!win) createWindow(); else win.show(); });
 app.whenReady().then(async () => {
   createWindow();
   loadCatalog();
-  if (!SELFTEST) setTimeout(async () => { const r = await checkSelfUpdate(); if (r.available) send('self', r); }, 4000);
+  updater.start(send, { autoCheck: !SELFTEST });
   if (SELFTEST) runSelfTest().catch(e => { U.log('SELFTEST CRASH', e); app.exit(1); });
 });
 
@@ -393,7 +369,7 @@ async function runSelfTest() {
     await T('swap', async () => {
       const zip = UPDATE_ZIP;
       check(zip && fs.existsSync(zip), 'update zip present');
-      await applySelfUpdate(zip);
+      await updater.selfTestSwap(zip);
     });
     if (failed) app.exit(1);
     return;
@@ -436,6 +412,10 @@ async function runSelfTest() {
       check(s('7zip').includes('7zip.7zip'), 'search "7zip" -> 7zip.7zip (' + s('7zip').slice(0, 3) + ')');
       check(s('chrome')[0] === 'Google.Chrome', 'search "chrome" -> Google.Chrome (' + s('chrome').slice(0, 3) + ')');
       check(s('discord')[0] === 'Discord.Discord', 'search "discord" -> Discord.Discord');
+    });
+    await T('meta', async () => {
+      const m = await winMeta('7zip.7zip');
+      check(m && m.home && m.desc, `winget manifest gives homepage + description for icons (${m && m.home} | ${m && m.desc})`);
     });
     const wg = await hasWinget();
     U.log(wg ? 'winget present' : 'WARN winget not available on this machine, skipping install test');
