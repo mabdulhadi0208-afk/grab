@@ -61,6 +61,7 @@ jobs:
           P2=$(pgrep -f "/Applications/Grab.app/Contents/MacOS/Grab" | head -1)
           [ -n "$P2" ] && [ "$P2" != "$P1" ] && echo "✓ new process after update (pid $P2) still running after 15s" || { echo "✗ app not running after update"; cat $L/update.log $L/grab.log; exit 1; }
           [ "$(grep -c "boot $V" $L/grab.log)" -ge 2 ] && echo "✓ booted twice, version $V" || { echo "✗ expected two boots"; cat $L/grab.log; exit 1; }
+          [ "$(grep -c "swapping" $L/update.log)" = "1" ] && echo "✓ swapped exactly once (no update loop)" || { echo "✗ update ran more than once"; cat $L/update.log; exit 1; }
           grep -q "renderer ready" $L/grab.log && echo "✓ UI up after update"
           grep -E "UNCAUGHT|UNHANDLED|renderer ERROR" $L/grab.log && { echo "✗ errors after update"; exit 1; } || echo "✓ no errors after update"
           cat $L/update.log
@@ -98,10 +99,16 @@ jobs:
         run: |
           $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
           if ($exe.Length -lt 50MB) { throw "installer too small: $($exe.Length)" }
-          Start-Process -FilePath $exe.FullName -ArgumentList '/S' -Wait
           $app = "$env:LOCALAPPDATA\Programs\Grab\Grab.exe"
-          for ($i = 0; $i -lt 60 -and !(Test-Path $app); $i++) { Start-Sleep -Seconds 1 }
-          if (!(Test-Path $app)) { throw "silent install did not produce $app" }
+          # the one-click installer can hand off to a second process and return early, so retry and wait for the files
+          foreach ($try in 1..3) {
+            $pr = Start-Process -FilePath $exe.FullName -ArgumentList '/S' -Wait -PassThru
+            "installer attempt $try exit code: $($pr.ExitCode)"
+            for ($i = 0; $i -lt 60 -and !(Test-Path $app); $i++) { Start-Sleep -Seconds 1 }
+            if (Test-Path $app) { break }
+          }
+          if (!(Test-Path $app)) { Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue; throw "silent install did not produce $app" }
+          Start-Sleep -Seconds 3
           Get-Process Grab -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
           "✓ installed to $app"

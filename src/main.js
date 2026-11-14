@@ -11,6 +11,10 @@ const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 const backend = IS_MAC ? require('./mac') : require('./win');
 const SELFTEST = process.env.GRAB_SELFTEST || '';
+const UPDATE_ZIP = process.env.GRAB_UPDATE_ZIP || '';
+// never pass test flags on to anything we launch (the relaunched app after an update, installers, etc.)
+delete process.env.GRAB_SELFTEST;
+delete process.env.GRAB_UPDATE_ZIP;
 const REPO = 'mabdulhadi0208-afk/grab';
 
 globalThis.__grabFetch = (url, opts) => net.fetch(url, opts);
@@ -276,7 +280,7 @@ async function applySelfUpdate(localFile) {
       `rm -rf ${q(bundle + '.old')}`,
       `if mv ${q(bundle)} ${q(bundle + '.old')} && /usr/bin/ditto ${q(newApp)} ${q(bundle)}; then rm -rf ${q(bundle + '.old')}; echo "$(date) swapped" >> ${q(logf)}; else rm -rf ${q(bundle)}; mv ${q(bundle + '.old')} ${q(bundle)}; echo "$(date) swap FAILED, restored" >> ${q(logf)}; fi`,
       `/usr/bin/xattr -dr com.apple.quarantine ${q(bundle)} 2>/dev/null`,
-      `/usr/bin/open ${q(bundle)} && echo "$(date) launched OK" >> ${q(logf)}`,
+      `/usr/bin/env -u GRAB_SELFTEST -u GRAB_UPDATE_ZIP /usr/bin/open -n ${q(bundle)} && echo "$(date) launched OK" >> ${q(logf)}`,
       `rm -rf ${q(tmp)}`,
     ].join('\n');
     spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore' }).unref();
@@ -381,7 +385,7 @@ async function runSelfTest() {
   });
   if (SELFTEST === 'swap') {
     await T('swap', async () => {
-      const zip = process.env.GRAB_UPDATE_ZIP;
+      const zip = UPDATE_ZIP;
       check(zip && fs.existsSync(zip), 'update zip present');
       await applySelfUpdate(zip);
     });
