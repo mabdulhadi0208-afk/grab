@@ -55,6 +55,40 @@ function createWindow() {
 
 function send(ch, data) { try { if (win && !win.isDestroyed()) win.webContents.send(ch, data); } catch {} }
 
+// ---------------- real app icons ----------------
+// Mac: App Fair's "appcasks" publishes each cask's actual app icon. Windows: UniGetUI's community icon database (by package id).
+// A website's favicon is only a last resort, and only when that site belongs to this one app (see renderer).
+const hostCount = new Map();
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } }
+function macIcon(it) {
+  if (!IS_MAC || !it || String(it.id).startsWith('url:')) return '';
+  if (!['app', 'suite', 'pkg', 'installer'].includes(it.kind || 'app')) return '';
+  return `https://github.com/App-Fair/appcasks/releases/download/cask-${encodeURIComponent(it.id)}/AppIcon.png`;
+}
+let winIconsP = null;
+function winIconKey(id) { const parts = String(id).split('.'); return (parts.length > 1 ? parts.slice(1) : parts).join('.').toLowerCase().replace(/[ _.]/g, '-'); }
+function winIcons() {
+  if (winIconsP) return winIconsP;
+  winIconsP = (async () => {
+    const file = path.join(app.getPath('userData'), 'icons-win.json');
+    let cached = null;
+    try { cached = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    if (cached && cached.map && Date.now() - cached.ts < 24 * 3600e3) return cached.map;
+    try {
+      const res = await net.fetch('https://raw.githubusercontent.com/marticliment/UniGetUI/main/WebBasedData/screenshot-database-v2.json');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const db = (await res.json()).icons_and_screenshots || {};
+      const map = {};
+      for (const [k, v] of Object.entries(db)) if (v && typeof v.icon === 'string' && /^https:\/\//.test(v.icon)) map[k] = v.icon;
+      if (Object.keys(map).length < 1000) throw new Error('icon database too small');
+      try { fs.writeFileSync(file, JSON.stringify({ ts: Date.now(), map })); } catch {}
+      U.log('icon database', Object.keys(map).length, 'icons');
+      return map;
+    } catch (e) { U.log('icon database failed', e.message); winIconsP = null; return (cached && cached.map) || {}; }
+  })();
+  return winIconsP;
+}
+
 // ---------------- catalog ----------------
 function pub(it) {
   if (!it) return null;
@@ -64,6 +98,7 @@ function pub(it) {
     id: it.id, name: it.name, desc: it.desc || '', ver: it.ver || '', home: it.home || '', host: it.host || '',
     publisher: it.publisher || '', verified: IS_MAC ? !!(it.sha && it.sha !== 'no_check') : true,
     installed, path: installedPath, deprecated: !!it.deprecated, label: it.label || '',
+    icon: macIcon(it), solo: !!(it.host0 && hostCount.get(it.host0) === 1),
   };
 }
 
@@ -73,6 +108,8 @@ async function loadCatalog(force = false) {
     const t0 = Date.now();
     const r = await backend.fetchCatalog(cacheFile, process.arch, { force });
     const items = prepare(r.items);
+    hostCount.clear();
+    for (const it of items) { it.host0 = hostOf(it.home); if (it.host0) hostCount.set(it.host0, (hostCount.get(it.host0) || 0) + 1); }
     catalog = { ready: true, error: null, items, byId: new Map(items.map(i => [i.id, i])), ts: r.ts };
     U.log(`catalog ${items.length} apps from ${r.source} in ${Date.now() - t0}ms`);
     send('catalog', catalogInfo());
@@ -324,7 +361,11 @@ ipcMain.handle('upd:state', () => updater.state());
 ipcMain.handle('upd:check', () => updater.check(true));
 ipcMain.handle('upd:install', () => updater.install());
 ipcMain.handle('upd:cancel', () => updater.cancel());
-ipcMain.handle('meta', (_e, id) => winMeta(String(id)).catch(() => null));
+ipcMain.handle('meta', async (_e, id) => {
+  id = String(id);
+  const [m, icons] = await Promise.all([winMeta(id).catch(() => null), winIcons().catch(() => ({}))]);
+  return { ...(m || {}), icon: icons[winIconKey(id)] || (m && m.icon) || '' };
+});
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
 
 // ---------------- lifecycle ----------------
@@ -376,6 +417,13 @@ async function runSelfTest() {
   }
   const s = (q) => search(catalog.items, q, 10).map(i => i.id);
   if (IS_MAC) {
+    await T('icons', async () => {
+      for (const id of ['google-chrome', 'discord', 'visual-studio-code']) {
+        const r = await net.fetch(pub(itemOrThrow(id)).icon, { method: 'HEAD' });
+        check(r.ok, `real app icon exists for ${id}`);
+      }
+      check(pub(itemOrThrow('google-chrome')).solo === false, 'shared sites (google.com) are never used as an app icon');
+    });
     await T('search', async () => {
       check(s('chrome')[0] === 'google-chrome', 'search "chrome" -> google-chrome (' + s('chrome').slice(0, 3) + ')');
       check(s('discord')[0] === 'discord', 'search "discord" -> discord');
@@ -412,6 +460,11 @@ async function runSelfTest() {
       check(s('7zip').includes('7zip.7zip'), 'search "7zip" -> 7zip.7zip (' + s('7zip').slice(0, 3) + ')');
       check(s('chrome')[0] === 'Google.Chrome', 'search "chrome" -> Google.Chrome (' + s('chrome').slice(0, 3) + ')');
       check(s('discord')[0] === 'Discord.Discord', 'search "discord" -> Discord.Discord');
+    });
+    await T('icons', async () => {
+      const icons = await winIcons();
+      check(Object.keys(icons).length > 3000, `icon database loaded (${Object.keys(icons).length} icons)`);
+      for (const id of ['Google.Chrome', '7zip.7zip', 'Microsoft.VisualStudioCode', 'Python.Python.3.13']) check(!!icons[winIconKey(id)], `real app icon for ${id}`);
     });
     await T('meta', async () => {
       const m = await winMeta('7zip.7zip');

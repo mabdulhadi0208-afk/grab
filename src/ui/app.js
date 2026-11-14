@@ -44,38 +44,39 @@
     const name = (it.name || '?').trim();
     const ch = (name.match(/[A-Za-z0-9]/) || [name[0] || '?'])[0].toUpperCase();
     const h = hue(it.id || name);
-    return `<div class="ic" data-id="${esc(it.id || '')}" data-home="${esc(it.home || '')}" data-path="${esc(it.path || '')}"><div class="letter" style="background:linear-gradient(135deg,hsl(${h} 70% 58%),hsl(${(h + 40) % 360} 75% 45%))">${esc(ch)}</div><img alt=""></div>`;
+    return `<div class="ic" data-id="${esc(it.id || '')}" data-icon="${esc(it.icon || '')}" data-solo="${it.solo ? 1 : ''}" data-name="${esc(it.name || '')}" data-home="${esc(it.home || '')}" data-path="${esc(it.path || '')}"><div class="letter" style="background:linear-gradient(135deg,hsl(${h} 70% 58%),hsl(${(h + 40) % 360} 75% 45%))">${esc(ch)}</div><img alt=""></div>`;
   }
   // Icon sources, best first: winget's own icon, GitHub owner avatar (for GitHub-hosted apps), Google's favicon service, DuckDuckGo, Google s2.
   const metaCache = new Map();
-  const iconMem = (() => { try { return JSON.parse(localStorage.getItem('grab-icons') || '{}'); } catch { return {}; } })();
+  const iconMem = (() => { try { return JSON.parse(localStorage.getItem('grab-icons-v2') || '{}'); } catch { return {}; } })();
   let iconMemT = null;
-  function iconRemember(id, url) { if (!id) return; iconMem[id] = url; clearTimeout(iconMemT); iconMemT = setTimeout(() => { try { localStorage.setItem('grab-icons', JSON.stringify(iconMem)); } catch {} }, 800); }
+  function iconRemember(id, url) { if (!id) return; iconMem[id] = url; clearTimeout(iconMemT); iconMemT = setTimeout(() => { try { localStorage.setItem('grab-icons-v2', JSON.stringify(iconMem)); } catch {} }, 800); }
   function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } }
-  function iconSources(homes, direct) {
+  // Only the app's own icon counts. A website favicon is allowed only when the site clearly belongs to this one app:
+  // its address contains the app's name, or (Mac) no other app in the catalog shares that site.
+  const sq = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  function siteIsApps(host, name, id, solo) {
+    const h = sq(host.split('.').slice(0, -1).join('.'));
+    const words = [sq(name), sq(String(name).split(/\s+/)[0]), sq(String(id).split(/[.@]/).pop())].filter(w => w.length >= 4);
+    return solo || words.some(w => h.includes(w));
+  }
+  function iconSources(homes, direct, name, id, solo) {
     const out = [];
     if (direct) out.push([direct, 16]);
     for (const home of homes) {
-      if (!home) continue;
-      const host = hostOf(home);
-      if (!host) continue;
-      const gh = /^https?:\/\/(?:www\.)?github\.com\/([^/?#]+)/i.exec(home);
-      if (gh) { out.push([`https://github.com/${gh[1]}.png?size=128`, 32]); continue; }
-      const gl = /^(?:[^.]+\.)?(github\.io|sourceforge\.net|gitlab\.com)$/.exec(host);
-      if (gl && host.endsWith('github.io')) { out.push([`https://github.com/${host.split('.')[0]}.png?size=128`, 32]); continue; }
-      out.push([`https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent('https://' + host)}&size=128`, 32]);
-      const root = host.split('.').slice(-2).join('.');
-      if (root !== host) out.push([`https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent('https://' + root)}&size=128`, 32]);
-      out.push([`https://icons.duckduckgo.com/ip3/${host}.ico`, 16]);
+      const host = home && hostOf(home);
+      if (!host || !siteIsApps(host, name, id, solo)) continue;
+      out.push([`https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=${encodeURIComponent('https://' + host)}&size=128`, 48]);
     }
     const seen = new Set();
     return out.filter(([u]) => !seen.has(u) && seen.add(u));
   }
+  function markReal(box, img, u) { if (!/gstatic\.com/.test(u)) { img.classList.add('real'); box.classList.add('has-real'); } }
   function loadChain(box, img, srcs, id) {
     if (!srcs.length) { iconRemember(id, 'none'); return; }
     const [u, min] = srcs.shift();
     img.onload = () => {
-      if (img.naturalWidth >= min) { img.classList.add('on'); box.classList.add('has-img'); iconRemember(id, u); jellyIn(box); }
+      if (img.naturalWidth >= min) { markReal(box, img, u); img.classList.add('on'); box.classList.add('has-img'); iconRemember(id, u); jellyIn(box); }
       else loadChain(box, img, srcs, id);
     };
     img.onerror = () => loadChain(box, img, srcs, id);
@@ -85,7 +86,7 @@
     for (const box of $$('.ic:not([data-h])', root)) {
       box.dataset.h = '1';
       const img = $('img', box);
-      const p = box.dataset.path, home = box.dataset.home, id = box.dataset.id;
+      const p = box.dataset.path, home = box.dataset.home, id = box.dataset.id, name = box.dataset.name, solo = !!box.dataset.solo;
       const setReal = (url) => { img.className = 'real on'; img.src = url; box.classList.add('has-img', 'has-real'); };
       if (p) {
         if (realIcons.has(p)) { setReal(realIcons.get(p)); continue; }
@@ -94,23 +95,23 @@
       }
       start();
       async function start() {
-        let homes = [home], direct = '';
+        let homes = [home], direct = box.dataset.icon || '';
         if (!isMac() && id && !id.startsWith('url:')) {
           let m = metaCache.get(id);
           if (m === undefined) { m = await G.meta(id).catch(() => null); metaCache.set(id, m); }
           if (m) {
-            homes = [m.home, m.pub, home]; direct = m.icon || '';
+            homes = [m.home, home]; direct = m.icon || '';
             if (m.desc) { const card = box.closest('[data-open]'); const d = card && $('.desc', card); if (d && !d.dataset.meta) { d.dataset.meta = '1'; d.textContent = m.desc; } const it = S.items.get(id); if (it) { it.mdesc = m.desc; it.mhome = m.home; } }
           }
         }
         const known = id && iconMem[id];
         if (known === 'none') return;
         if (known) {
-          img.onload = () => { img.classList.add('on'); box.classList.add('has-img'); };
-          img.onerror = () => { delete iconMem[id]; loadChain(box, img, iconSources(homes, direct), id); };
+          img.onload = () => { markReal(box, img, known); img.classList.add('on'); box.classList.add('has-img'); };
+          img.onerror = () => { delete iconMem[id]; loadChain(box, img, iconSources(homes, direct, name, id, solo), id); };
           img.src = known; return;
         }
-        loadChain(box, img, iconSources(homes, direct), id);
+        loadChain(box, img, iconSources(homes, direct, name, id, solo), id);
       }
     }
   }

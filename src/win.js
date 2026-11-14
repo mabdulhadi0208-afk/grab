@@ -35,11 +35,7 @@ const HOMES = {
   'Python.Python.3.13': 'https://python.org',
 };
 
-function homeFor(id) {
-  if (HOMES[id]) return HOMES[id];
-  const pub = String(id).split('.')[0].toLowerCase().replace(/[^a-z0-9-]/g, '');
-  return pub.length > 1 ? `https://${pub}.com` : '';
-}
+function homeFor(id) { return HOMES[id] || ''; } // never guess a domain: a wrong guess shows the wrong site and icon
 
 // ---------- catalog ----------
 async function initSql() {
