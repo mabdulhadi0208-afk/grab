@@ -46,6 +46,7 @@ jobs:
           wait $PID; CODE=$?
           set -e
           echo "----- grab.log"; cat $L/grab.log
+          [ "$CODE" = "0" ] || { echo "----- stdout/stderr"; tail -60 selftest.out; ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i grab && head -80 "$(ls -t ~/Library/Logs/DiagnosticReports/*Grab* 2>/dev/null | head -1)"; }
           [ "$CODE" = "0" ] && grep -q "SELFTEST PASS" $L/grab.log && echo "✓ self test passed" || { echo "✗ self test failed (exit $CODE)"; exit 1; }
           grep -E "UNCAUGHT|UNHANDLED|renderer ERROR" $L/grab.log && { echo "✗ errors in log"; exit 1; } || echo "✓ no errors in log"
           test -d /Applications/AppCleaner.app && echo "✓ AppCleaner really landed in /Applications"

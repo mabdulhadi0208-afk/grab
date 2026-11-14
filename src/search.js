@@ -17,11 +17,21 @@ function prepare(items) {
   return items;
 }
 
+// q appears in the name as whole word(s): "chrome" in "Google Chrome"
+function wordHit(name, q) {
+  const i = name.indexOf(q);
+  if (i < 0) return false;
+  const before = i === 0 || !/[a-z0-9]/.test(name[i - 1]);
+  const after = i + q.length >= name.length || !/[a-z0-9]/.test(name[i + q.length]);
+  return before && after;
+}
+
 function score(it, q, qs, words) {
   let s = 0;
   if (it._n === q || it._ns === qs) s += 1000;
   else if (it._is === qs || it._i === q) s += 900;
   else if (it._as.includes(qs)) s += 800;
+  else if (wordHit(it._n, q)) s += 520 - Math.min(120, it._n.length);
   else if (it._n.startsWith(q) || it._ns.startsWith(qs)) s += 500 - Math.min(200, it._n.length);
   else if (it._i.startsWith(q) || it._is.startsWith(qs)) s += 400 - Math.min(200, it._i.length);
   else if (it._as.some(a => a.startsWith(qs))) s += 420;

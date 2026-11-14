@@ -288,6 +288,30 @@ async function applySelfUpdate(localFile) {
   }
 }
 
+// Real app icons for installed apps. Mac: read the bundle's .icns and convert with sips (no Electron icon APIs).
+const iconCache = new Map();
+async function appIcon(p) {
+  if (!IS_MAC || typeof p !== 'string' || !p.endsWith('.app') || !fs.existsSync(p)) return null;
+  if (iconCache.has(p)) return iconCache.get(p);
+  let out = null;
+  try {
+    const plist = path.join(p, 'Contents', 'Info.plist');
+    const r = await U.run('/usr/bin/plutil', ['-extract', 'CFBundleIconFile', 'raw', '-o', '-', plist], { timeout: 5000 });
+    let name = r.code === 0 ? r.out.trim() : '';
+    if (name) {
+      if (!/\.icns$/i.test(name)) name += '.icns';
+      const icns = path.join(p, 'Contents', 'Resources', name);
+      if (fs.existsSync(icns)) {
+        const png = path.join(os.tmpdir(), `grab-icon-${process.pid}-${iconCache.size}.png`);
+        const c = await U.run('/usr/bin/sips', ['-s', 'format', 'png', '--resampleHeightWidthMax', '128', icns, '--out', png], { timeout: 10000 });
+        if (c.code === 0 && fs.existsSync(png)) { out = 'data:image/png;base64,' + fs.readFileSync(png).toString('base64'); U.rmrf(png); }
+      }
+    }
+  } catch (e) { U.log('icon failed', p, e.message); }
+  iconCache.set(p, out);
+  return out;
+}
+
 // ---------------- IPC ----------------
 function itemOrThrow(id) { const it = catalog.byId.get(id); if (!it) throw new Error('Unknown app'); return it; }
 
@@ -318,7 +342,7 @@ ipcMain.handle('open', async (_e, id) => { const it = catalog.byId.get(id); cons
 ipcMain.handle('openPath', (_e, p) => { if (typeof p === 'string' && fs.existsSync(p)) return shell.openPath(p); });
 ipcMain.handle('reveal', (_e, p) => { if (typeof p === 'string' && fs.existsSync(p)) shell.showItemInFolder(p); });
 ipcMain.handle('external', (_e, url) => { if (/^https?:\/\//i.test(String(url))) shell.openExternal(String(url)); });
-ipcMain.handle('icon', async (_e, p) => { try { if (!p || !fs.existsSync(p)) return null; const img = await app.getFileIcon(p, { size: 'large' }); return img.isEmpty() ? null : img.toDataURL(); } catch { return null; } });
+ipcMain.handle('icon', (_e, p) => appIcon(p));
 ipcMain.handle('self:check', () => checkSelfUpdate());
 ipcMain.handle('self:apply', () => applySelfUpdate());
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
