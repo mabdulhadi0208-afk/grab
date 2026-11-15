@@ -1,0 +1,29 @@
+name: Icon audit
+on:
+  push:
+    branches: [audit]
+  workflow_dispatch:
+jobs:
+  audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Run audit
+        shell: bash
+        env: { GRAB_SELFTEST: audit, GRAB_DEBUG: "1" }
+        run: |
+          export GRAB_AUDIT_OUT="$PWD/audit-${{ runner.os }}.json"
+          npx electron . > audit.log 2>&1 || true
+          grep -E "audit|catalog|CRASH" audit.log | tail -20
+          ls -la audit-*.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ runner.os }}
+          path: audit-*.json
