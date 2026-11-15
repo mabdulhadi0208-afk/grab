@@ -1,0 +1,35 @@
+name: Icon audit
+on:
+  push:
+    branches: [audit]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Run audit
+        shell: bash
+        env: { GRAB_SELFTEST: audit, GRAB_DEBUG: "1" }
+        run: |
+          export GRAB_AUDIT_OUT="$PWD/audit-${{ runner.os }}.json"
+          npx electron . > audit.log 2>&1 || true
+          grep -E "audit|catalog|CRASH" audit.log | tail -20
+          ls -la audit-*.json
+      - name: Publish result to a branch
+        shell: bash
+        run: |
+          F=audit-${{ runner.os }}.json
+          mkdir out && cp $F out/ && cd out
+          git init -q -b audit-results-${{ runner.os }}
+          git add -A && git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -q -m "audit result"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" audit-results-${{ runner.os }}

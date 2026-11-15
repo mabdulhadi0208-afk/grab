@@ -469,6 +469,7 @@ async function runSelfTest() {
     const pop = catalogInfo().popular;
     check(pop.length >= 15, `popular list resolves (${pop.length})`);
   });
+  if (SELFTEST === 'audit') { await runAudit().catch(e => U.log('AUDIT CRASH', e)); app.exit(0); return; }
   if (SELFTEST === 'swap') {
     await T('swap', async () => {
       const zip = UPDATE_ZIP;
@@ -579,4 +580,80 @@ async function runSelfTest() {
   }
   U.log(failed ? 'SELFTEST FAILED' : 'SELFTEST PASS');
   setTimeout(() => app.exit(failed ? 1 : 0), 500);
+}
+
+
+// ---------------- icon audit (CI only): dump the exact icon Grab shows for well-known apps, so a human can look at every one ----------------
+const AUDIT_MAC = `microsoft-edge 1password alfred bartender cleanmymac notion-calendar ghostty zed warp signal tor-browser transmission qbittorrent keka stats alt-tab
+github postman gimp inkscape libreoffice anki zotero prismlauncher heroic moonlight gog-galaxy messenger microsoft-teams microsoft-word microsoft-excel microsoft-powerpoint
+microsoft-outlook onedrive google-drive dropbox skype whatsapp@beta opera opera-gx vivaldi safari-technology-preview chromium librewolf zen orion duckduckgo
+android-studio intellij-idea pycharm webstorm sublime-text fork sourcetree tower github-desktop gitkraken insomnia tableplus dbeaver-community sequel-ace
+utm virtualbox parallels vmware-fusion orbstack podman-desktop kitty alacritty wezterm hyper tabby
+adobe-creative-cloud adobe-acrobat-reader affinity sketch krita davinci-resolve kdenlive shotcut obs vlc iina mpv plex jellyfin-media-player spotify tidal
+bitwarden keepassxc protonvpn nordvpn mullvad-vpn tailscale wireguard-tools little-snitch lulu malwarebytes
+logi-options+ karabiner-elements hammerspoon bettertouchtool monitorcontrol hiddenbar ice maccy shottr cleanshot betterdisplay aldente coconutbattery
+notion obsidian logseq craft evernote todoist ticktick linear-linear trello clickup miro
+discord telegram signal slack zoom webex loom whatsapp element thunderbird spark-desktop mimestream
+steam epic-games battle-net minecraft roblox league-of-legends curseforge nvidia-geforce-now xbox whisky crossover
+chatgpt claude cursor windsurf lm-studio ollama jan perplexity raycast arc brave-browser firefox google-chrome visual-studio-code docker-desktop
+balenaetcher appcleaner the-unarchiver handbrake-app audacity blender figma capcut rectangle iterm2 daisydisk grandperspective onyx transmit cyberduck filezilla`.split(/\s+/);
+const AUDIT_WIN = `Microsoft.Edge Opera.Opera Vivaldi.Vivaldi Mozilla.Thunderbird LibreWolf.LibreWolf Zen-Team.Zen-Browser DuckDuckGo.DesktopBrowser
+GitHub.GitHubDesktop Postman.Postman GIMP.GIMP.3 Inkscape.Inkscape TheDocumentFoundation.LibreOffice Anki.Anki DigitalScholar.Zotero PrismLauncher.PrismLauncher HeroicGamesLauncher.HeroicGamesLauncher
+Microsoft.Teams Microsoft.Office Microsoft.OneDrive Google.GoogleDrive Dropbox.Dropbox Microsoft.WindowsTerminal Microsoft.PowerShell Microsoft.VisualStudio.2022.Community
+Google.AndroidStudio JetBrains.IntelliJIDEA.Community JetBrains.PyCharm.Community SublimeHQ.SublimeText.4 Axosoft.GitKraken Insomnia.Insomnia dbeaver.dbeaver Notepad++.Notepad++
+Oracle.VirtualBox Docker.DockerDesktop RedHat.Podman-Desktop Alacritty.Alacritty wez.wezterm PuTTY.PuTTY WinSCP.WinSCP TimKosse.FileZilla.Client
+Adobe.Acrobat.Reader.64-bit KDE.Krita KDE.Kdenlive Meltytech.Shotcut HandBrake.HandBrake mpv.net Plex.Plex Jellyfin.JellyfinMediaPlayer TIDALMusicAS.TIDAL
+Bitwarden.Bitwarden KeePassXCTeam.KeePassXC Proton.ProtonVPN MullvadVPN.MullvadVPN Tailscale.Tailscale WireGuard.WireGuard Malwarebytes.Malwarebytes
+Logitech.OptionsPlus AutoHotkey.AutoHotkey voidtools.Everything WinDirStat.WinDirStat CPUID.CPU-Z CPUID.HWMonitor REALiX.HWiNFO Rufus.Rufus Balena.Etcher qBittorrent.qBittorrent
+Notion.Notion Obsidian.Obsidian Logseq.Logseq Evernote.Evernote Doist.Todoist Element.Element OpenWhisperSystems.Signal Zoom.Zoom Cisco.Webex
+Valve.Steam EpicGames.EpicGamesLauncher Blizzard.BattleNet Mojang.MinecraftLauncher Roblox.Roblox RiotGames.LeagueOfLegends.NA Overwolf.CurseForge Nvidia.GeForceNow GOG.Galaxy Ubisoft.Connect ElectronicArts.EADesktop
+OpenAI.ChatGPT Anthropic.Claude Anysphere.Cursor Codeium.Windsurf ElementLabs.LMStudio Ollama.Ollama Brave.Brave Mozilla.Firefox Google.Chrome Microsoft.VisualStudioCode
+7zip.7zip RARLab.WinRAR VideoLAN.VLC OBSProject.OBSStudio Audacity.Audacity BlenderFoundation.Blender Figma.Figma Spotify.Spotify Discord.Discord Telegram.TelegramDesktop SlackTechnologies.Slack
+ShareX.ShareX Greenshot.Greenshot Microsoft.PowerToys Git.Git Python.Python.3.13 OpenJS.NodeJS.LTS Apple.iTunes Apple.iCloud AnyDeskSoftwareGmbH.AnyDesk TeamViewer.TeamViewer RustDesk.RustDesk Parsec.Parsec`.split(/\s+/);
+
+function thumb(buf) {
+  try { const { nativeImage } = require('electron'); const img = nativeImage.createFromBuffer(buf); if (!img.isEmpty()) return img.resize({ width: 96, height: 96, quality: 'best' }).toPNG().toString('base64'); } catch {}
+  return buf.length < 80000 ? buf.toString('base64') : null;
+}
+async function fetchImg(url) {
+  try {
+    const r = await net.fetch(url);
+    if (!r.ok) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length < 200 || buf.length > 3000000) return null;
+    return thumb(buf);
+  } catch { return null; }
+}
+async function runAudit() {
+  const out = process.env.GRAB_AUDIT_OUT || path.join(os.tmpdir(), 'grab-audit.json');
+  const ids = [...new Set([...backend.POPULAR, ...PACKS[IS_MAC ? 'mac' : 'win'].flatMap(p => p.ids), ...(IS_MAC ? AUDIT_MAC : AUDIT_WIN), ...catalog.items.filter(i => priceOf(i.id, IS_MAC)).map(i => i.id)])];
+  const items = ids.map(id => catalog.byId.get(id)).filter(Boolean);
+  U.log('audit: ' + items.length + ' apps, not in catalog: ' + ids.filter(id => !catalog.byId.get(id)).join(' '));
+  const icons = IS_WIN ? await winIcons() : null;
+  const rows = await U.pool(items, 8, async (it) => {
+    const row = { id: it.id, name: it.name, src: 'none', url: '', b64: null };
+    const chain = [];
+    if (IS_MAC) {
+      const p = pub(it);
+      p.icons.filter(u => !/dashboard-icons/.test(u)).forEach((u, i) => chain.push([i ? 'old-name' : 'appcasks', u]));
+      if (p.fav) chain.push(['site', p.fav]);
+      p.icons.filter(u => /dashboard-icons/.test(u)).forEach(u => chain.push(['library', u]));
+    } else {
+      const m = await winMeta(it.id).catch(() => null);
+      if (m && m.icon) chain.push(['manifest', m.icon]);
+      const u = winIconFor(it.id, icons); if (u) chain.push(['unigetui', u]);
+      const f = m ? favHost(it, m.home) : ''; if (f) chain.push(['site', f]);
+      row.home = m ? m.home : '';
+    }
+    for (const [src, u] of chain) {
+      let b64 = null;
+      if (src === 'site') { const d = await favicon(u); b64 = d ? thumb(Buffer.from(d.split(',')[1], 'base64')) : null; } else b64 = await fetchImg(u);
+      if (b64) { row.src = src; row.url = u; row.b64 = b64; break; }
+    }
+    return row;
+  });
+  const tally = {}; for (const r of rows) tally[r.src] = (tally[r.src] || 0) + 1;
+  U.log('audit sources ' + JSON.stringify(tally));
+  fs.writeFileSync(out, JSON.stringify(rows));
+  U.log('audit written ' + out);
 }
