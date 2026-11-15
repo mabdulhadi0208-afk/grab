@@ -105,54 +105,145 @@
     }
   }
 
-  // ---------- springs & jelly ----------
-  // Real spring curves as CSS linear() easings (damped harmonic oscillator, sampled).
+  // ---------- living jelly: one underdamped spring engine drives hover, press, pull and every wobble ----------
+  // CSS easings sampled from the same spring (damped harmonic oscillator), so entrances wobble the same way.
   function springEasing(stiffness, damping, mass = 1) {
     const w0 = Math.sqrt(stiffness / mass), z = damping / (2 * Math.sqrt(stiffness * mass));
     const wd = w0 * Math.sqrt(Math.max(0, 1 - z * z));
     const x = (t) => z < 1 ? 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + (z * w0 / wd) * Math.sin(wd * t)) : 1 - Math.exp(-w0 * t) * (1 + w0 * t);
-    let T = 0; while (T < 10 && !(Math.abs(1 - x(T)) < 0.001 && Math.abs(1 - x(T + 0.05)) < 0.001)) T += 0.02;
-    const pts = []; for (let i = 0; i <= 60; i++) pts.push(+x((i / 60) * T).toFixed(4));
-    pts[60] = 1;
+    let T = 0; while (T < 6 && !(Math.abs(1 - x(T)) < 0.002 && Math.abs(1 - x(T + 0.05)) < 0.002 && Math.abs(1 - x(T + 0.11)) < 0.002)) T += 0.02;
+    const N = 140, pts = []; for (let i = 0; i <= N; i++) pts.push(+x((i / N) * T).toFixed(4));
+    pts[N] = 1;
     return { css: `linear(${pts.join(', ')})`, ms: Math.round(T * 1000) };
   }
-  const SP = { jelly: springEasing(260, 11), bouncy: springEasing(200, 16), soft: springEasing(170, 24) };
   const RS = document.documentElement.style;
-  RS.setProperty('--jelly', SP.jelly.css); RS.setProperty('--bouncy', SP.bouncy.css); RS.setProperty('--soft', SP.soft.css);
   const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // Squash-and-stretch wobble using the independent `scale` property, so it never fights transforms (hover, magnet, skew).
-  // Motion level: Chill 0.5, Bouncy 1, MAX 1.7 (default). Scales every wobble, wave and stretch.
-  const LEVELS = { chill: 0.5, bouncy: 1, max: 1.7 };
-  let MK = 1.7, MLEVEL = 'max';
-  function setMotion(name) { MLEVEL = LEVELS[name] ? name : 'max'; MK = LEVELS[MLEVEL]; RS.setProperty('--mk', MK); document.body.dataset.motion = MLEVEL; try { localStorage.setItem('grab-motion', MLEVEL); } catch {} }
-  setMotion((() => { try { return localStorage.getItem('grab-motion') || 'max'; } catch { return 'max'; } })());
-  function jelly(el, k = 1) {
-    if (!el || REDUCE || !el.animate) return;
-    const a = Math.min(0.42, 0.12 * k * MK);
-    el.animate([
-      { scale: '1 1' }, { scale: `${1 + a} ${1 - a}` }, { scale: `${1 - a * 0.75} ${1 + a * 0.75}` },
-      { scale: `${1 + a * 0.4} ${1 - a * 0.4}` }, { scale: `${1 - a * 0.18} ${1 + a * 0.18}` }, { scale: '1 1' },
-    ], { duration: 640, easing: 'cubic-bezier(.3,.7,.4,1)' });
+  // JELLY: damping ratio about 0.19, so every move overshoots by roughly half and wobbles five or more times before it settles.
+  const LV = {
+    chill: { btn: 1.06, card: 1.02, soft: 1.01, tilt: 4, press: 0.94, mag: 0.12, K: 230, C: 17, skew: 1.2, band: 60, mk: 0.5, burst: 'cubic-bezier(.3,1.25,.5,1)' },
+    bouncy: { btn: 1.18, card: 1.05, soft: 1.02, tilt: 12, press: 0.82, mag: 0.3, K: 220, C: 9.5, skew: 4, band: 140, mk: 1, burst: 'cubic-bezier(.34,1.56,.64,1)' },
+    max: { btn: 1.5, card: 1.12, soft: 1.04, tilt: 25, press: 0.6, mag: 0.5, K: 210, C: 5.6, skew: 15, band: 300, mk: 1.7, burst: 'cubic-bezier(.3,2.4,.5,1)' },
+  };
+  const SP = { jelly: null, bouncy: null, soft: springEasing(170, 24) };
+  let L = LV.max, MK = 1.7, MLEVEL = 'max';
+  function setMotion(name) {
+    MLEVEL = LV[name] ? name : 'max'; L = LV[MLEVEL]; MK = L.mk;
+    const sp = springEasing(L.K, L.C); SP.jelly = SP.bouncy = sp;
+    RS.setProperty('--mk', MK); RS.setProperty('--jelly', sp.css); RS.setProperty('--bouncy', sp.css); RS.setProperty('--soft', SP.soft.css);
+    RS.setProperty('--jelly-ms', sp.ms + 'ms'); RS.setProperty('--spring', L.burst);
+    document.body.dataset.motion = MLEVEL; try { localStorage.setItem('grab-motion', MLEVEL); } catch {}
   }
+  setMotion((() => { try { return localStorage.getItem('grab-motion') || 'max'; } catch { return 'max'; } })());
+
+  const J = (() => {
+    const act = new Set(); let last = 0, running = false;
+    const CH = [['x', 'vx', 'tx'], ['y', 'vy', 'ty'], ['s', 'vs', 'ts'], ['rx', 'vrx', 'trx'], ['ry', 'vry', 'try']];
+    const get = (el) => el._j || (el._j = { el, x: 0, y: 0, s: 1, rx: 0, ry: 0, vx: 0, vy: 0, vs: 0, vrx: 0, vry: 0, tx: 0, ty: 0, ts: 1, trx: 0, try: 0 });
+    function wake(o) { act.add(o); o.el.classList.add('jx'); if (!running) { running = true; last = performance.now(); requestAnimationFrame(tick); } }
+    function to(el, t) { if (REDUCE || !el) return null; const o = get(el); Object.assign(o, t); wake(o); return o; }
+    function kick(el, v) { if (REDUCE || !el) return; const o = get(el); for (const k in v) o[k] += v[k]; wake(o); }
+    function tick(now) {
+      const dt = Math.min(0.034, Math.max(0.001, (now - last) / 1000)); last = now;
+      const n = Math.max(1, Math.round(dt / 0.004)), h = dt / n;
+      for (const o of act) {
+        if (!o.el.isConnected) { act.delete(o); continue; }
+        for (let i = 0; i < n; i++) for (const [p, v, t] of CH) { o[v] += (L.K * (o[t] - o[p]) - (o.C || L.C) * o[v]) * h; o[p] += o[v] * h; }
+        let rest = true;
+        for (const [p, v, t] of CH) { const sc = p === 's' ? 400 : p === 'x' || p === 'y' ? 4 : 8; if (Math.abs(o[t] - o[p]) * sc > 1 || Math.abs(o[v]) * sc > 6) { rest = false; break; } }
+        const st = o.el.style;
+        if (rest) {
+          for (const [p, v, t] of CH) { o[p] = o[t]; o[v] = 0; }
+          const idle = o.ts === 1 && !o.tx && !o.ty && !o.trx && !o.try;
+          st.scale = o.ts === 1 ? '' : `${o.ts} ${o.ts}`; st.translate = o.tx || o.ty ? `${o.tx}px ${o.ty}px` : '';
+          const a0 = Math.hypot(o.trx, o.try); st.transform = a0 > 0.05 ? `perspective(900px) rotateX(${o.trx}deg) rotateY(${o.try}deg)` : '';
+          if (idle) o.el.classList.remove('jx');
+          act.delete(o); continue;
+        }
+        // squash and stretch: whatever the size is doing right now, one axis leads and the other lags (up to 40%)
+        const d = Math.max(-0.4, Math.min(0.4, o.vs * 0.075));
+        st.scale = `${Math.max(0.05, o.s * (1 + d)).toFixed(4)} ${Math.max(0.05, o.s * (1 - d)).toFixed(4)}`;
+        st.translate = `${o.x.toFixed(2)}px ${o.y.toFixed(2)}px`;
+        const a = Math.hypot(o.rx, o.ry);
+        st.transform = a > 0.05 ? `perspective(900px) rotateX(${o.rx.toFixed(2)}deg) rotateY(${o.ry.toFixed(2)}deg)` : '';
+      }
+      if (act.size) requestAnimationFrame(tick); else running = false;
+    }
+    return { to, kick, get };
+  })();
+  // one-shot wobble (state changes, toasts, badges...)
+  function jelly(el, k = 1) { J.kick(el, { vs: Math.min(9, 3.2 * k * MK) }); }
   function jellyIn(el) {
     if (!el || REDUCE || !el.animate) return;
-    el.animate([{ scale: '.6 .6', opacity: 0 }, { scale: '1 1', opacity: 1 }], { duration: SP.jelly.ms, easing: SP.jelly.css });
+    el.animate([{ scale: '.5 .5', opacity: 0 }, { scale: '1 1', opacity: 1 }], { duration: SP.jelly.ms, easing: SP.jelly.css });
   }
-  // press = squish, release = wobble back
-  const PRESS = '.btn, .card, .rowi, .nav-btn, .chip, .clear, .search, .self-card';
-  document.addEventListener('pointerdown', (e) => {
-    const el = e.target.closest(PRESS); if (!el || REDUCE || !el.animate) return;
-    el._press = el.animate([{ scale: '1 1' }, { scale: el.matches('.btn, .chip, .clear') ? '1.06 .9' : '.975 .965' }], { duration: 140, easing: 'ease-out', fill: 'forwards' });
-    const up = () => { removeEventListener('pointerup', up); removeEventListener('pointercancel', up); try { el._press && el._press.cancel(); } catch {} jelly(el, el.matches('.btn, .chip') ? 1.1 : 0.45); };
-    addEventListener('pointerup', up); addEventListener('pointercancel', up);
-  });
+
+  // hover swells and pulls toward the cursor, cards tilt in 3D, pressing squashes, releasing pops
+  (() => {
+    const BTN = '.btn, .chip, .sw, .seg-b, .clear', CARD = '.card, .pack', SOFT = '.nav-btn, .rowi, .dl, .set, .search, .self-card, .brand';
+    const ALL = `${BTN}, ${CARD}, ${SOFT}`;
+    const kind = (el) => (el.matches(BTN) ? 'btn' : el.matches(CARD) ? 'card' : 'soft');
+    const hov = new Set(); let pressed = null, drag = null;
+    const rest = (el) => (hov.has(el) ? L[kind(el)] : 1);
+    // a swollen, tilted button drifts under the cursor, so it keeps a generous halo: still hovered, still clickable
+    const near = (el, x, y, m) => { const r = el.getBoundingClientRect(); return x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m; };
+    const held = (x, y, t, m) => { for (const el of hov) if (el.isConnected && kind(el) === 'btn' && !el.disabled && (el.contains(t) || near(el, x, y, m))) return el; return null; };
+    const unhover = (el) => { hov.delete(el); if (drag && drag.el === el) return; J.to(el, { ts: pressed === el ? L.press : 1, tx: 0, ty: 0, trx: 0, try: 0 }); };
+    document.addEventListener('click', (e) => {
+      if (!e.isTrusted) return;
+      const b = held(e.clientX, e.clientY, e.target, 16);
+      if (b && !b.contains(e.target)) { e.stopPropagation(); e.preventDefault(); b.click(); }
+    }, true);
+    document.addEventListener('pointerover', (e) => {
+      if (REDUCE || e.pointerType === 'touch') return;
+      for (let el = e.target.closest && e.target.closest(ALL); el; el = el.parentElement && el.parentElement.closest(ALL)) {
+        if (hov.has(el)) continue; hov.add(el);
+        J.to(el, { ts: pressed === el ? L.press : rest(el) });
+      }
+    });
+    document.addEventListener('pointerout', (e) => {
+      for (const el of [...hov]) if (!el.isConnected || (!el.contains(e.relatedTarget) && !(kind(el) === 'btn' && e.relatedTarget && near(el, e.clientX, e.clientY, 24)))) unhover(el);
+    });
+    document.addEventListener('pointermove', (e) => {
+      for (const el of hov) {
+        if (!el.isConnected) { hov.delete(el); continue; }
+        const k = kind(el); if (k === 'soft') continue;
+        if (k === 'btn' && !el.contains(e.target) && !near(el, e.clientX, e.clientY, 24)) { unhover(el); continue; }
+        const o = J.get(el), r = el.getBoundingClientRect();
+        if (k === 'btn') { J.to(el, { tx: (e.clientX - (r.left + r.width / 2 - o.x)) * L.mag, ty: (e.clientY - (r.top + r.height / 2 - o.y)) * L.mag }); }
+        else if (!(drag && drag.el === el)) { const px = (e.clientX - r.left) / r.width - 0.5, py = (e.clientY - r.top) / r.height - 0.5; J.to(el, { trx: -py * 2 * L.tilt, try: px * 2 * L.tilt }); }
+      }
+      // pull: a pressed card, pack or row follows the cursor like rubber
+      if (drag && e.pointerId === drag.id) {
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y, dist = Math.hypot(dx, dy);
+        if (!drag.on && dist < 7) return; drag.on = true;
+        const f = 0.5 / (1 + dist / 600); J.to(drag.el, { tx: dx * f, ty: dy * f });
+      }
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (REDUCE || e.button !== 0) return;
+      const hb = held(e.clientX, e.clientY, e.target, 16);
+      const el = hb || (e.target.closest && e.target.closest(ALL)); if (!el) return;
+      pressed = el; J.to(el, { ts: L.press, C: 15 }); // the squash itself lands firmly; the release is what bounces
+      const c = e.target.closest('.card, .pack, .rowi, .dl'); if (c && !hb && !e.target.closest('button')) drag = { el: c, x: e.clientX, y: e.clientY, id: e.pointerId, on: false };
+    });
+    const up = () => {
+      if (pressed) { const el = pressed; pressed = null; J.to(el, { ts: rest(el), C: 0 }); J.kick(el, { vs: 2.2 * MK }); }
+      if (drag) {
+        const d = drag; drag = null; J.to(d.el, { tx: 0, ty: 0 });
+        if (d.on) { const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); }; document.addEventListener('click', stop, { capture: true, once: true }); setTimeout(() => document.removeEventListener('click', stop, { capture: true }), 60); }
+      }
+    };
+    document.addEventListener('pointerup', up); document.addEventListener('pointercancel', up);
+  })();
   // icons wobble when you hover their card
   document.addEventListener('pointerover', (e) => {
-    const c = e.target.closest('.card, .rowi'); if (!c || c.contains(e.relatedTarget)) return;
+    const c = e.target.closest && e.target.closest('.card, .rowi'); if (!c || c.contains(e.relatedTarget)) return;
     const ic = $('.ic', c); if (!ic || REDUCE || !ic.animate) return;
-    ic.animate([{ rotate: '0deg', scale: '1 1' }, { rotate: '-8deg', scale: '1.1 .92' }, { rotate: '6deg', scale: '.95 1.07' }, { rotate: '-3deg', scale: '1.03 .98' }, { rotate: '0deg', scale: '1 1' }], { duration: 700, easing: 'ease-out' });
+    ic.animate([{ rotate: '0deg', scale: '1 1' }, { rotate: '-12deg', scale: '1.2 .82' }, { rotate: '10deg', scale: '.86 1.16' }, { rotate: '-6deg', scale: '1.08 .94' }, { rotate: '3deg', scale: '.97 1.03' }, { rotate: '0deg', scale: '1 1' }], { duration: 900, easing: 'ease-out' });
   });
-  $('#q').addEventListener('focus', () => jelly($('#search-wrap'), 0.35));
+  // headline letters squash, stretch and bounce when the cursor runs over them
+  document.addEventListener('pointerover', (e) => { const l = e.target.closest && e.target.closest('.l'); if (l) J.kick(l, { vy: -520 * MK, vs: 4.5 * MK }); });
+  $('#q').addEventListener('focus', () => jelly($('#search-wrap'), 0.5));
 
   // ---------- juice: confetti burst, click ripples, 3D tilt ----------
   function burst(el, n = 14) {
@@ -176,61 +267,10 @@
     b.appendChild(w);
     w.animate([{ transform: 'scale(0)', opacity: 0.35 }, { transform: 'scale(1)', opacity: 0 }], { duration: 620, easing: 'cubic-bezier(.2,.7,.2,1)' }).onfinish = () => w.remove();
   });
-  // cards and packs lean toward the cursor, and spring flat when it leaves
-  document.addEventListener('pointermove', (e) => {
-    const c = e.target.closest && e.target.closest('.card, .pack'); if (!c || REDUCE) return;
-    const r = c.getBoundingClientRect(), px = (e.clientX - r.left) / r.width - 0.5, py = (e.clientY - r.top) / r.height - 0.5;
-    c.style.setProperty('--ry', (px * 9).toFixed(2) + 'deg'); c.style.setProperty('--rx', (-py * 9).toFixed(2) + 'deg');
-  });
-  document.addEventListener('pointerout', (e) => {
-    const c = e.target.closest && e.target.closest('.card, .pack'); if (!c || c.contains(e.relatedTarget)) return;
-    c.style.setProperty('--ry', '0deg'); c.style.setProperty('--rx', '0deg');
-  });
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && ['1', '2', '3', '4', '5', '6'].includes(e.key)) { e.preventDefault(); const b = $$('.nav-btn')[+e.key - 1]; if (b) { b.click(); jelly(b, 0.8); } }
   });
-
-  // ---------- MAX motion: elastic drag, letter bounce, hover squish ----------
-  // Grab any card or pack and pull it: it stretches like rubber and snaps back with a wobble.
-  (() => {
-    let el = null, sx = 0, sy = 0, dragging = false, id = 0;
-    document.addEventListener('pointerdown', (e) => {
-      if (REDUCE || e.button !== 0) return;
-      const c = e.target.closest('.card, .pack, .rowi, .dl'); if (!c || e.target.closest('button')) return;
-      el = c; sx = e.clientX; sy = e.clientY; dragging = false; id = e.pointerId;
-    });
-    document.addEventListener('pointermove', (e) => {
-      if (!el || e.pointerId !== id) return;
-      const dx = e.clientX - sx, dy = e.clientY - sy, dist = Math.hypot(dx, dy);
-      if (!dragging && dist < 7) return;
-      if (!dragging) { dragging = true; el.classList.add('pull'); }
-      const f = 0.42 / (1 + dist / 520), st = Math.min(0.16, dist / 1400) * Math.min(1.4, MK), ang = Math.atan2(dy, dx);
-      el.style.translate = `${(dx * f).toFixed(1)}px ${(dy * f).toFixed(1)}px`;
-      el.style.scale = `${(1 + st * Math.abs(Math.cos(ang))).toFixed(3)} ${(1 + st * Math.abs(Math.sin(ang))).toFixed(3)}`;
-      el.style.rotate = `${(dx * 0.012).toFixed(2)}deg`;
-    });
-    const end = () => {
-      if (!el) return; const c = el; el = null;
-      if (!dragging) return;
-      const from = { translate: c.style.translate || '0px 0px', scale: c.style.scale || '1 1', rotate: c.style.rotate || '0deg' };
-      c.style.translate = c.style.scale = c.style.rotate = '';
-      c.animate([from, { translate: '0px 0px', scale: '1 1', rotate: '0deg' }], { duration: SP.jelly.ms, easing: SP.jelly.css }).onfinish = () => c.classList.remove('pull');
-      // a pull is not a click
-      const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
-      document.addEventListener('click', stop, { capture: true, once: true });
-      setTimeout(() => document.removeEventListener('click', stop, { capture: true }), 60);
-    };
-    document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
-  })();
-  // headline letters hop when the cursor runs over them; everything clickable squishes a little on hover
-  document.addEventListener('pointerover', (e) => {
-    if (REDUCE) return;
-    const l = e.target.closest && e.target.closest('.l');
-    if (l && l.animate) { l.animate([{ translate: '0 0', scale: '1 1', rotate: '0deg' }, { translate: `0 ${-14 * MK}px`, scale: '.9 1.2', rotate: `${(Math.random() - 0.5) * 24}deg` }, { translate: '0 0', scale: '1.15 .85', rotate: '0deg' }, { translate: '0 0', scale: '1 1', rotate: '0deg' }], { duration: 620, easing: 'cubic-bezier(.3,.7,.4,1)' }); return; }
-    const b = e.target.closest && e.target.closest('.btn, .nav-btn, .chip, .sw, .seg-b, .pill, .fact, .set, .brand');
-    if (b && !b.contains(e.relatedTarget)) jelly(b, b.matches('.set, .fact') ? 0.18 : 0.55);
-  });
-  $('.brand').addEventListener('click', () => { jelly($('.logo'), 3); burst($('.logo'), 18); });
+  $('.brand').addEventListener('click', () => { jelly($('.logo'), 2.5); burst($('.logo'), 18); });
 
   // ---------- action button ----------
   function actionHTML(it, extraClass = '') {
@@ -272,23 +312,23 @@
   const fluid = (() => {
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const main = $('.main'), blob = $('#blob'), glow = $('#sglow');
-    const goo = $$('#goo i'), gp = goo.map(() => ({ x: 0, y: 0 }));
+    const goo = $$('#goo i'), gp = goo.map(() => ({ x: undefined, y: undefined, vx: 0, vy: 0 }));
     let wave = 0, waveV = 0, waveShown = 0;
     let target = 0, cur = 0, wheeling = false, vel = 0, lastTop = 0, idle = 0, over = 0, overV = 0, overShown = 0;
     const maxScroll = () => Math.max(0, view.scrollHeight - view.clientHeight);
+    let pos = 0, sv = 0, lastWheel = 0, lastT = performance.now();
     view.addEventListener('wheel', (e) => {
       if (reduce || e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
       e.preventDefault();
-      if (!wheeling) { cur = target = view.scrollTop; }
+      if (!wheeling) { pos = target = view.scrollTop; sv = 0; }
       const d = e.deltaY * (e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? view.clientHeight : 1);
-      const raw = target + d;
-      if (raw < 0 || raw > maxScroll()) over = Math.max(-140, Math.min(140, over + (raw < 0 ? -d : -d) * 0.35 * (1 - Math.abs(over) / 160)));
-      target = Math.max(0, Math.min(maxScroll(), raw));
-      wheeling = true;
+      // the target may run past either end (rubber band); it is pulled back as soon as the wheel stops
+      target = Math.max(-L.band, Math.min(maxScroll() + L.band, target + d));
+      wheeling = true; lastWheel = performance.now();
     }, { passive: false });
     // keyboard / scrollbar drags take over instantly
-    view.addEventListener('pointerdown', () => { wheeling = false; });
-    addEventListener('keydown', (e) => { if (['PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', ' '].includes(e.key) && document.activeElement !== $('#q')) wheeling = false; });
+    view.addEventListener('pointerdown', (e) => { if (e.target === view) { wheeling = false; over = 0; } });
+    addEventListener('keydown', (e) => { if (['PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', ' '].includes(e.key) && document.activeElement !== $('#q')) { wheeling = false; over = 0; } });
     let mx = -999, my = -999, bx = -999, by = -999;
     main.addEventListener('pointermove', (e) => { const r = main.getBoundingClientRect(); mx = e.clientX - r.left; my = e.clientY - r.top; main.classList.add('hov');
       const c = e.target.closest && e.target.closest('.card');
@@ -297,26 +337,39 @@
     main.addEventListener('pointerleave', () => main.classList.remove('hov'));
     (function loop() {
       requestAnimationFrame(loop);
+      const now = performance.now(), dt = Math.min(0.034, Math.max(0.001, (now - lastT) / 1000)); lastT = now;
       if (wheeling) {
-        cur += (target - cur) * 0.14;
-        if (Math.abs(target - cur) < 0.4) { cur = target; wheeling = false; }
-        view.scrollTop = cur;
+        const mxs = maxScroll(), idleW = now - lastWheel > 110;
+        if (idleW) target = Math.max(0, Math.min(mxs, target));
+        if (MLEVEL === 'max') { // underdamped: overshoots the target and bounces back several times
+          const n = Math.max(1, Math.round(dt / 0.004)), h = dt / n;
+          for (let i = 0; i < n; i++) { sv += (150 * (target - pos) - 5.4 * sv) * h; pos += sv * h; }
+        } else { pos += (target - pos) * (1 - Math.pow(0.86, dt * 60)); sv = 0; }
+        const real = Math.max(0, Math.min(mxs, pos));
+        view.scrollTop = real;
+        over = Math.max(-300, Math.min(300, real - pos));
+        if (idleW && Math.abs(target - pos) < 0.4 && Math.abs(sv) < 3) { pos = target; sv = 0; over = 0; wheeling = false; }
       }
       const top = view.scrollTop;
-      vel += ((top - lastTop) - vel) * 0.2; lastTop = top;
-      // rubber band: overscroll stretches the content, then springs back with a little jiggle
-      overV += (-over * 0.12); overV *= 0.68; over += overV;
-      if (Math.abs(over) < 0.05 && Math.abs(overV) < 0.05) over = overV = 0;
-      if (over !== overShown) { overShown = over; const vi = view.firstElementChild; if (vi) { vi.style.transform = over ? `translateY(${over.toFixed(2)}px)` : ''; vi.style.transformOrigin = over > 0 ? '50% 0' : '50% 100%'; vi.style.scale = over ? `1 ${(1 + Math.abs(over) / 2400).toFixed(4)}` : ''; } }
-      const sk = reduce ? 0 : Math.max(-2.2, Math.min(2.2, vel * -0.06));
-      view.style.setProperty('--sk', (sk * Math.min(1.5, MK)).toFixed(3) + 'deg');
+      vel += ((top - lastTop - (over - overShown)) - vel) * 0.2; lastTop = top;
+      // past either end the page stretches like rubber instead of stopping
+      if (over !== overShown) { overShown = over; const vi = view.firstElementChild; if (vi) { vi.style.translate = over ? `0 ${over.toFixed(2)}px` : ''; vi.style.transformOrigin = over > 0 ? '50% 0' : '50% 100%'; vi.style.scale = over ? `1 ${(1 + Math.abs(over) / 1500).toFixed(4)}` : ''; } }
+      const sk = reduce ? 0 : Math.max(-L.skew, Math.min(L.skew, vel * -(L.skew / 40)));
+      view.style.setProperty('--sk', sk.toFixed(3) + 'deg');
       // jelly wave: content lags behind the scroll column by column, overshoots, and settles
       const wt = reduce ? 0 : Math.max(-30, Math.min(30, vel * -1.2)) * MK;
       waveV += (wt - wave) * 0.11; waveV *= 0.8; wave += waveV;
       if (Math.abs(wave) < 0.02 && Math.abs(waveV) < 0.02) wave = waveV = 0;
       if (wave !== waveShown) { waveShown = wave; view.style.setProperty('--vy', wave.toFixed(2) + 'px'); view.style.setProperty('--st', (1 + Math.min(0.05, Math.abs(wave) / 900)).toFixed(4)); }
       // gooey cursor trail
-      if (goo && mx > -999) for (let i = 0; i < gp.length; i++) { const g = gp[i], k = 0.22 - i * 0.045; g.x += (mx - g.x) * k; g.y += (my - g.y) * k; goo[i].style.transform = `translate(${g.x}px, ${g.y}px)`; }
+      // cursor trail on loose springs: each blob overshoots the cursor and stretches along its direction of travel
+      if (goo.length && mx > -999) for (let i = 0; i < gp.length; i++) {
+        const g = gp[i];
+        if (g.x === undefined || MLEVEL === 'chill') { g.x = g.x === undefined ? mx : g.x + (mx - g.x) * 0.2; g.y = g.y === undefined ? my : g.y + (my - g.y) * 0.2; g.vx = g.vy = 0; }
+        else { const K = 70 - i * 11, C = 3.4 - i * 0.3, n = 4, h = dt / n; for (let j = 0; j < n; j++) { g.vx += (K * (mx - g.x) - C * g.vx) * h; g.vy += (K * (my - g.y) - C * g.vy) * h; g.x += g.vx * h; g.y += g.vy * h; } }
+        const sp = Math.hypot(g.vx, g.vy), st = 1 + Math.min(1, sp / 1400);
+        goo[i].style.transform = `translate(${g.x.toFixed(1)}px, ${g.y.toFixed(1)}px) rotate(${Math.atan2(g.vy, g.vx).toFixed(3)}rad) scale(${st.toFixed(3)}, ${(1 / Math.sqrt(st)).toFixed(3)})`;
+      }
       if (Math.abs(vel) > 0.5) { main.classList.add('scrolling'); idle = 0; } else if (++idle > 30) main.classList.remove('scrolling');
       const h = view.clientHeight, sh = view.scrollHeight;
       if (sh > h) { const th = Math.max(30, h * h / sh); glow.style.height = th + 'px'; glow.style.transform = `translateY(${view.offsetTop + (top / (sh - h)) * (h - th)}px)`; }
@@ -330,13 +383,7 @@
       for (const el of $$('.card, .rowi, .dl, .urlcard, .pack', root)) { if (reduce) continue; el.classList.add('rv'); io.observe(el); }
       magnet(root);
     }
-    function magnet(root) {
-      for (const b of $$('.btn-solid, .btn-get, .btn.big', root)) {
-        if (b._m) continue; b._m = 1; b.classList.add('mag');
-        b.addEventListener('pointermove', (e) => { const r = b.getBoundingClientRect(); b.style.transform = `translate(${(e.clientX - r.left - r.width / 2) * 0.25}px, ${(e.clientY - r.top - r.height / 2) * 0.4}px)`; });
-        b.addEventListener('pointerleave', () => { b.style.transform = ''; });
-      }
-    }
+    function magnet() {} // hover pull is handled by the spring engine now
     function counters(root) {
       for (const el of $$('[data-count]', root)) {
         const n = +el.dataset.count, t0 = performance.now();
@@ -352,7 +399,7 @@
         ind._y = y;
       }
     }
-    function jump(y) { wheeling = false; target = cur = y; view.scrollTop = y; }
+    function jump(y) { wheeling = false; target = pos = y; sv = 0; over = 0; view.scrollTop = y; }
     return { reveal, counters, nav, magnet, jump };
   })();
 
@@ -510,7 +557,7 @@
     const mod = isMac() ? '⌘' : 'Ctrl ';
     setView(`<div class="hero"><h1>Settings</h1></div>
       <div class="set"><div><b>Colour</b><span>Pick the vibe for the whole app</span></div><div class="swatches">${Object.entries(THEMES).map(([k, c]) => `<button class="sw${S.theme === k ? ' on' : ''}" data-theme="${k}" title="${k}" style="background:linear-gradient(135deg,${c.join(',')})"></button>`).join('')}</div></div>
-      <div class="set"><div><b>Motion</b><span>How bouncy everything is</span></div><div class="seg">${[['chill', 'Chill'], ['bouncy', 'Bouncy'], ['max', 'MAX']].map(([k, n]) => `<button class="seg-b${MLEVEL === k ? ' on' : ''}" data-motion="${k}">${n}</button>`).join('')}</div></div>
+      <div class="set"><div><b>Motion</b><span>JELLY overshoots and wobbles on everything. Chill keeps it calm.</span></div><div class="seg">${[['chill', 'Chill'], ['bouncy', 'Bouncy'], ['max', 'JELLY']].map(([k, n]) => `<button class="seg-b${MLEVEL === k ? ' on' : ''}" data-motion="${k}">${n}</button>`).join('')}</div></div>
       <div class="set"><div><b>Free apps only</b><span>Hide apps Grab knows cost money</span></div>${freeToggle()}</div>
       <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates install themselves in the background</span></div><button class="btn" data-upd-check>Check for updates</button></div>
       <div class="set"><div><b>Shortcuts</b><span>${mod}K search · ${mod}1 to ${mod}6 switch tabs · Esc close</span></div></div>
