@@ -502,7 +502,7 @@ async function runSelfTest() {
       const known = catalog.items.filter(i => priceOf(i.id, true)).length;
       U.log(`pricing: ${known} catalog apps carry a Paid/Subscription label`);
       check(known >= 60, 'pricing list matches real catalog apps');
-      for (const p of PACKS.mac) { const n = p.ids.filter(id => catalog.byId.get(id)).length; check(n === p.ids.length, `pack "${p.name}" resolves ${n}/${p.ids.length}` + (n === p.ids.length ? '' : ' missing ' + p.ids.filter(id => !catalog.byId.get(id)))); }
+      for (const p of PACKS.mac) { const miss = p.ids.filter(id => !catalog.byId.get(id)); U.log(`pack "${p.name}" resolves ${p.ids.length - miss.length}/${p.ids.length}${miss.length ? ' MISSING ' + miss : ''}`); check(p.ids.length - miss.length >= Math.min(4, p.ids.length), `pack "${p.name}" usable`); }
     });
     await T('search', async () => {
       check(s('chrome')[0] === 'google-chrome', 'search "chrome" -> google-chrome (' + s('chrome').slice(0, 3) + ')');

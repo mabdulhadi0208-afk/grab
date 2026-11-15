@@ -39,7 +39,7 @@ const PACKS = {
   mac: [
     { id: 'essentials', name: 'Essentials', blurb: 'The first apps for a fresh Mac', hue: 255, ids: ['google-chrome', 'vlc', 'the-unarchiver', 'rectangle', 'appcleaner', 'raycast'] },
     { id: 'chat', name: 'Chat & calls', blurb: 'Stay in touch', hue: 200, ids: ['discord', 'whatsapp', 'telegram', 'slack', 'zoom', 'signal'] },
-    { id: 'create', name: 'Creator kit', blurb: 'Record, edit, design', hue: 320, ids: ['obs', 'handbrake', 'audacity', 'blender', 'capcut', 'figma'] },
+    { id: 'create', name: 'Creator kit', blurb: 'Record, edit, design', hue: 320, ids: ['obs', 'handbrake-app', 'audacity', 'blender', 'capcut', 'figma'] },
     { id: 'code', name: 'Coding', blurb: 'Everything to start building', hue: 150, ids: ['visual-studio-code', 'iterm2', 'docker-desktop', 'cursor', 'github', 'postman'] },
     { id: 'games', name: 'Gaming', blurb: 'Launchers and voice chat', hue: 20, ids: ['steam', 'epic-games', 'discord', 'obs'] },
   ],

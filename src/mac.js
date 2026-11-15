@@ -11,7 +11,7 @@ const CASK_URL = 'https://formulae.brew.sh/api/cask.json';
 const POPULAR = [
   'google-chrome', 'discord', 'spotify', 'visual-studio-code', 'whatsapp', 'zoom', 'firefox', 'notion',
   'vlc', 'obs', 'telegram', 'steam', 'brave-browser', 'arc', 'chatgpt', 'claude', 'raycast', 'rectangle',
-  'slack', 'figma', 'iina', 'the-unarchiver', 'appcleaner', 'handbrake', 'iterm2', 'docker-desktop',
+  'slack', 'figma', 'iina', 'the-unarchiver', 'appcleaner', 'handbrake-app', 'iterm2', 'docker-desktop',
   'obsidian', 'capcut', 'microsoft-teams', 'blender', 'audacity', 'minecraft', 'epic-games', 'cursor',
 ];
 
