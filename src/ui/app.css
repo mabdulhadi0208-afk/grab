@@ -371,3 +371,7 @@ body[data-motion="chill"] .btn:hover { animation: none; }
 
 .card .row { flex-wrap: nowrap; } .card .row .btn { flex: none; } .card .ver { flex: 1 1 0; min-width: 0; }
 .card .row .pill { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 0; }
+
+.filt { width: 100%; max-width: 320px; height: 36px; padding: 0 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 13.5px; outline: 0; user-select: text; transition: border-color .25s; }
+.filt:focus { border-color: var(--a1); }
+.rowi[hidden] { display: none; }

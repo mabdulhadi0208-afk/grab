@@ -1,7 +1,7 @@
 {
   "name": "grab",
   "productName": "Grab",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Grab: search any app and install it in one click, straight from the official source. No browser, no fake download buttons.",
   "main": "src/main.js",
   "author": "Grab",

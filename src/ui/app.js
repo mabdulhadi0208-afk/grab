@@ -120,9 +120,9 @@
   const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // JELLY: damping ratio about 0.19, so every move overshoots by roughly half and wobbles five or more times before it settles.
   const LV = {
-    chill: { pop: 0, btn: 1.06, card: 1.02, soft: 1.01, tilt: 4, press: 0.94, mag: 0.12, K: 230, C: 17, skew: 1.2, band: 60, mk: 0.5, burst: 'cubic-bezier(.3,1.25,.5,1)' },
-    bouncy: { pop: 3, btn: 1.18, card: 1.05, soft: 1.02, tilt: 12, press: 0.82, mag: 0.3, K: 220, C: 9.5, skew: 4, band: 140, mk: 1, burst: 'cubic-bezier(.34,1.56,.64,1)' },
-    max: { pop: 9, btn: 1.3, card: 1.07, soft: 1.03, tilt: 25, press: 0.6, mag: 0.5, K: 210, C: 5.6, skew: 15, band: 300, mk: 1.7, burst: 'cubic-bezier(.3,2.4,.5,1)' },
+    chill: { pop: 0, btn: 1.04, card: 1.01, soft: 1.01, tilt: 3, press: 0.96, mag: 0.08, K: 230, C: 18, skew: 1, band: 50, mk: 0.5, burst: 'cubic-bezier(.3,1.25,.5,1)' },
+    bouncy: { pop: 1.5, btn: 1.1, card: 1.03, soft: 1.015, tilt: 8, press: 0.88, mag: 0.2, K: 220, C: 11, skew: 3, band: 90, mk: 1, burst: 'cubic-bezier(.34,1.56,.64,1)' },
+    max: { pop: 3.5, btn: 1.15, card: 1.04, soft: 1.02, tilt: 12, press: 0.8, mag: 0.28, K: 210, C: 8, skew: 6, band: 160, mk: 1.7, burst: 'cubic-bezier(.3,2.4,.5,1)' },
   };
   const SP = { jelly: null, bouncy: null, soft: springEasing(170, 24) };
   let L = LV.max, MK = 1.7, MLEVEL = 'max';
@@ -131,9 +131,9 @@
     const sp = springEasing(L.K, L.C); SP.jelly = SP.bouncy = sp;
     RS.setProperty('--mk', MK); RS.setProperty('--jelly', sp.css); RS.setProperty('--bouncy', sp.css); RS.setProperty('--soft', SP.soft.css);
     RS.setProperty('--jelly-ms', sp.ms + 'ms'); RS.setProperty('--spring', L.burst);
-    document.body.dataset.motion = MLEVEL; try { localStorage.setItem('grab-motion', MLEVEL); } catch {}
+    document.body.dataset.motion = MLEVEL; try { localStorage.setItem('grab-motion-v2', MLEVEL); } catch {}
   }
-  setMotion((() => { try { return localStorage.getItem('grab-motion') || 'max'; } catch { return 'max'; } })());
+  setMotion((() => { try { return localStorage.getItem('grab-motion-v2') || 'bouncy'; } catch { return 'bouncy'; } })());
 
   const J = (() => {
     const act = new Set(); let last = 0, running = false;
@@ -160,7 +160,7 @@
           act.delete(o); continue;
         }
         // squash and stretch: whatever the size is doing right now, one axis leads and the other lags (up to 45%)
-        const d = Math.max(-0.45, Math.min(0.45, o.vs * 0.075));
+        const d = Math.max(-0.22, Math.min(0.22, o.vs * 0.06));
         st.scale = `${Math.max(0.05, o.s * (1 + d)).toFixed(4)} ${Math.max(0.05, o.s * (1 - d)).toFixed(4)}`;
         st.translate = `${o.x.toFixed(2)}px ${o.y.toFixed(2)}px`;
         const a = Math.hypot(o.rx, o.ry);
@@ -171,7 +171,7 @@
     return { to, kick, get };
   })();
   // one-shot wobble (state changes, toasts, badges...)
-  function jelly(el, k = 1) { J.kick(el, { vs: Math.min(9, 3.2 * k * MK) }); }
+  function jelly(el, k = 1) { J.kick(el, { vs: Math.min(5, 2.4 * k * MK) }); }
   function jellyIn(el) {
     if (!el || REDUCE || !el.animate) return;
     el.animate([{ scale: '.5 .5', opacity: 0 }, { scale: '1 1', opacity: 1 }], { duration: SP.jelly.ms, easing: SP.jelly.css });
@@ -342,9 +342,9 @@
       if (wheeling) {
         const mxs = maxScroll(), idleW = now - lastWheel > 110;
         if (idleW) target = Math.max(0, Math.min(mxs, target));
-        if (MLEVEL === 'max') { // underdamped: overshoots the target and bounces back several times
+        if (MLEVEL !== 'chill') { // underdamped: overshoots the target and bounces back several times
           const n = Math.max(1, Math.round(dt / 0.004)), h = dt / n;
-          for (let i = 0; i < n; i++) { sv += (150 * (target - pos) - 5.4 * sv) * h; pos += sv * h; }
+          for (let i = 0; i < n; i++) { sv += (150 * (target - pos) - 8.5 * sv) * h; pos += sv * h; }
         } else { pos += (target - pos) * (1 - Math.pow(0.86, dt * 60)); sv = 0; }
         const real = Math.max(0, Math.min(mxs, pos));
         view.scrollTop = real;
@@ -477,7 +477,8 @@
     if (!S.cat.ready) { setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2></div><div class="grid">${'<div class="skel"></div>'.repeat(12)}</div>`); return; }
     if (S.pack) { const p = S.packs.find(x => x.id === S.pack); if (p) return renderPack(p); S.pack = null; }
     const packs = S.packs.length ? `<div class="h2"><h2>Starter packs</h2><span class="sub">A whole setup in one click</span></div><div class="packs">${S.packs.map(packCardHTML).join('')}</div>` : '';
-    setView(hero + wingetNote() + packs + `<div class="h2"><h2>Popular</h2>${freeToggle()}</div><div class="grid">${freeFilter(S.cat.popular).map(cardHTML).join('')}</div>`);
+    const rc = recents(), rec = rc.length ? `<div class="h2"><h2>Recent searches</h2><button class="btn btn-ghost" data-recent-clear>Clear</button></div><div class="chips">${rc.map(x => `<button class="chip" data-recent="${esc(x)}">${I.search}${esc(x)}</button>`).join('')}</div>` : '';
+    setView(hero + wingetNote() + rec + packs + `<div class="h2"><h2>Popular</h2>${freeToggle()}</div><div class="grid">${freeFilter(S.cat.popular).map(cardHTML).join('')}</div>`);
   }
   function loadingHTML(t = 'Loading the app catalog') { return `<div class="empty"><div class="spinner"></div><div class="big">${esc(t)}</div><div>First launch takes a few seconds.</div></div>`; }
 
@@ -495,12 +496,18 @@
     const list = S.scan.filter(s => !S.removed.has(s.id));
     if (!list.length) { setView(`<div class="hero"><h1>Installed</h1></div><div class="empty">${I.box}<div class="big">No matching apps yet</div><div>Apps you grab show up here.</div></div>`); return; }
     setView(`<div class="hero"><h1>Installed</h1><p>${list.length} app${list.length > 1 ? 's' : ''} Grab can keep updated.</p></div>
+      <div class="h2"><input class="filt" id="inst-filter" placeholder="Filter installed apps" autocomplete="off" spellcheck="false"></div>
       <div class="list">${list.map((s, i) => rowHTML(s, i, {
         sub: `${esc(s.installedVer ? 'v' + s.installedVer : '')}${s.update ? ' <span class="pill up">Update</span>' : ''}`,
         acts: `${actionHTML(s)}<button class="btn btn-ghost" data-remove="${esc(s.id)}" title="${isMac() ? 'Move to Trash' : 'Uninstall'}">${I.trash}</button>`,
       })).join('')}</div>`);
   }
 
+  document.addEventListener('input', (e) => {
+    if (e.target.id !== 'inst-filter') return;
+    const v = e.target.value.trim().toLowerCase();
+    $$('.list .rowi').forEach(r => { r.hidden = !!v && !(r.querySelector('.name')?.textContent || '').toLowerCase().includes(v); });
+  });
   function dlRowInner(j) {
     const it = S.items.get(j.itemId) || { id: j.itemId, name: j.name, home: j.home };
     const active = ['queued', 'downloading', 'installing'].includes(j.state);
@@ -560,7 +567,7 @@
     const mod = isMac() ? '⌘' : 'Ctrl ';
     setView(`<div class="hero"><h1>Settings</h1></div>
       <div class="set"><div><b>Colour</b><span>Pick the vibe for the whole app</span></div><div class="swatches">${Object.entries(THEMES).map(([k, c]) => `<button class="sw${S.theme === k ? ' on' : ''}" data-theme="${k}" title="${k}" style="background:linear-gradient(135deg,${c.join(',')})"></button>`).join('')}</div></div>
-      <div class="set"><div><b>Motion</b><span>JELLY overshoots and wobbles on everything. Chill keeps it calm.</span></div><div class="seg">${[['chill', 'Chill'], ['bouncy', 'Bouncy'], ['max', 'JELLY']].map(([k, n]) => `<button class="seg-b${MLEVEL === k ? ' on' : ''}" data-motion="${k}">${n}</button>`).join('')}</div></div>
+      <div class="set"><div><b>Motion</b><span>JELLY is the wobbliest, Bouncy is the sweet spot, Chill stays calm.</span></div><div class="seg">${[['chill', 'Chill'], ['bouncy', 'Bouncy'], ['max', 'JELLY']].map(([k, n]) => `<button class="seg-b${MLEVEL === k ? ' on' : ''}" data-motion="${k}">${n}</button>`).join('')}</div></div>
       <div class="set"><div><b>Free apps only</b><span>Hide apps Grab knows cost money</span></div>${freeToggle()}</div>
       <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates install themselves in the background</span></div><button class="btn" data-upd-check>Check for updates</button></div>
       <div class="set"><div><b>Shortcuts</b><span>${mod}K search · ${mod}1 to ${mod}6 switch tabs · Esc close</span></div></div>
@@ -726,6 +733,12 @@
     clearTimeout(qTimer);
     qTimer = setTimeout(runSearch, 90);
   });
+  const recents = () => store.get('grab-recent', []);
+  function addRecent(q) { q = (q || '').trim(); if (!q || /^https?:/i.test(q) || q.length > 40) return; store.set('grab-recent', [q, ...recents().filter(x => x.toLowerCase() !== q.toLowerCase())].slice(0, 6)); }
+  document.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-recent]'); if (c) { qEl.value = c.dataset.recent; S.q = qEl.value; $('#clear').hidden = false; runSearch(); return; }
+    if (e.target.closest('[data-recent-clear]')) { store.set('grab-recent', []); render(); }
+  });
   async function runSearch() {
     const my = ++qSeq;
     const q = S.q.trim();
@@ -739,7 +752,7 @@
   }
   qEl.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { if (qEl.value) { qEl.value = ''; S.q = ''; $('#clear').hidden = true; runSearch(); } else qEl.blur(); }
-    if (e.key === 'Enter') { const b = $('[data-url]'); if (b) b.click(); else if (S.results[0]) openSheet(S.results[0].id); }
+    if (e.key === 'Enter') { addRecent(qEl.value); const b = $('[data-url]'); if (b) b.click(); else if (S.results[0]) openSheet(S.results[0].id); }
   });
   $('#clear').addEventListener('click', (e) => { e.preventDefault(); qEl.value = ''; S.q = ''; $('#clear').hidden = true; runSearch(); qEl.focus(); });
   document.addEventListener('keydown', (e) => {
@@ -760,6 +773,7 @@
       if (j.verb === 'uninstall') { S.installed.delete(j.itemId); S.removed.add(j.itemId); toast(`${j.name} removed`); }
       else {
         S.installed.add(j.itemId); S.removed.delete(j.itemId);
+        if (!document.hasFocus() && j.result !== 'saved') { try { new Notification('Grab', { body: `${j.name} is ready`, silent: true }); } catch {} }
         if (S.scan) { const s = S.scan.find(x => x.id === j.itemId); if (s && j.verb !== 'uninstall') s.update = false; }
         toast(j.result === 'pkg-opened' ? `${j.name}: finish in the installer` : j.result === 'saved' ? `${j.name} saved to Downloads` : `${j.name} ${j.verb === 'update' ? 'updated' : 'installed'}`);
       }
