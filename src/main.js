@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const U = require('./util');
 const { prepare, search } = require('./search');
+const { priceOf, PACKS } = require('./extras');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -152,6 +153,7 @@ function pub(it) {
     publisher: it.publisher || '', verified: IS_MAC ? !!(it.sha && it.sha !== 'no_check') : true,
     installed, path: installedPath, deprecated: !!it.deprecated, label: it.label || '',
     icons: macIcons(it), fav: IS_MAC ? favHost(it, it.home) : '',
+    price: priceOf(it.id, IS_MAC),
   };
 }
 
@@ -390,7 +392,9 @@ ipcMain.handle('info', async () => ({ platform: process.platform, arch: process.
 ipcMain.handle('catalog', () => catalogInfo());
 ipcMain.handle('catalog:refresh', () => loadCatalog(true).then(catalogInfo));
 ipcMain.handle('search', (_e, q) => (catalog.ready ? search(catalog.items, String(q || '').slice(0, 100), 60).map(pub) : []));
+ipcMain.handle('packs', () => (catalog.ready ? PACKS[IS_MAC ? 'mac' : 'win'].map(p => ({ id: p.id, name: p.name, blurb: p.blurb, hue: p.hue, items: p.ids.map(id => catalog.byId.get(id)).filter(Boolean).map(pub) })).filter(p => p.items.length >= 3) : []));
 ipcMain.handle('get', (_e, id) => pub(catalog.byId.get(id)));
+ipcMain.handle('getMany', (_e, ids) => (Array.isArray(ids) ? ids.slice(0, 300).map(id => catalog.byId.get(String(id))).filter(Boolean).map(pub) : []));
 ipcMain.handle('install', (_e, id) => addJob(itemOrThrow(id), 'install'));
 ipcMain.handle('update', (_e, id) => addJob(itemOrThrow(id), 'update'));
 ipcMain.handle('url', (_e, url) => {
@@ -491,6 +495,15 @@ async function runSelfTest() {
       const ok = await favicon('raycast.com'); check(!!ok && ok.startsWith('data:image/'), 'site logo downloads for raycast.com');
       const bad = await favicon('this-site-does-not-exist-grab-test.com'); check(bad === null, 'a missing logo is rejected (no generic globe)');
     }, false);
+    await T('pricing + packs', async () => {
+      for (const id of ['bartender', 'sublime-text', 'minecraft']) { const it = catalog.byId.get(id); if (it) check(pub(it).price === 'paid', `${id} is labelled Paid`); }
+      for (const id of ['1password', 'microsoft-office']) { const it = catalog.byId.get(id); if (it) check(pub(it).price === 'sub', `${id} is labelled Subscription`); }
+      for (const id of ['google-chrome', 'vlc', 'discord', 'visual-studio-code']) check(pub(itemOrThrow(id)).price === '', `${id} has no price label`);
+      const known = catalog.items.filter(i => priceOf(i.id, true)).length;
+      U.log(`pricing: ${known} catalog apps carry a Paid/Subscription label`);
+      check(known >= 60, 'pricing list matches real catalog apps');
+      for (const p of PACKS.mac) { const n = p.ids.filter(id => catalog.byId.get(id)).length; check(n === p.ids.length, `pack "${p.name}" resolves ${n}/${p.ids.length}` + (n === p.ids.length ? '' : ' missing ' + p.ids.filter(id => !catalog.byId.get(id)))); }
+    });
     await T('search', async () => {
       check(s('chrome')[0] === 'google-chrome', 'search "chrome" -> google-chrome (' + s('chrome').slice(0, 3) + ')');
       check(s('discord')[0] === 'discord', 'search "discord" -> discord');
@@ -523,6 +536,13 @@ async function runSelfTest() {
       check(!backend.findInstalledPath(itemOrThrow('rectangle')), 'uninstall moved Rectangle to the Trash');
     });
   } else {
+    await T('pricing + packs', async () => {
+      const known = catalog.items.filter(i => priceOf(i.id, false));
+      U.log(`pricing: ${known.length} catalog apps carry a label: ${known.map(i => i.id).join(', ')}`);
+      check(known.length >= 15, 'pricing list matches real catalog apps');
+      check(priceOf('Google.Chrome', false) === '' && priceOf('VideoLAN.VLC', false) === '', 'free apps have no price label');
+      for (const p of PACKS.win) { const miss = p.ids.filter(id => !catalog.byId.get(id)); U.log(`pack "${p.name}" resolves ${p.ids.length - miss.length}/${p.ids.length}${miss.length ? ' missing ' + miss : ''}`); check(p.ids.length - miss.length >= 3, `pack "${p.name}" usable`); }
+    });
     await T('search', async () => {
       check(s('7zip').includes('7zip.7zip'), 'search "7zip" -> 7zip.7zip (' + s('7zip').slice(0, 3) + ')');
       check(s('chrome')[0] === 'Google.Chrome', 'search "chrome" -> Google.Chrome (' + s('chrome').slice(0, 3) + ')');

@@ -9,7 +9,7 @@
 
   const S = {
     info: { platform: 'darwin' }, cat: { ready: false, popular: [], count: 0 }, view: 'discover', q: '', results: [],
-    scan: null, jobsById: new Map(), jobsByItem: new Map(), items: new Map(), installed: new Set(), removed: new Set(),
+    packs: [], pack: null, freeOnly: (() => { try { return localStorage.getItem('grab-free') === '1'; } catch { return false; } })(), scan: null, jobsById: new Map(), jobsByItem: new Map(), items: new Map(), installed: new Set(), removed: new Set(),
   };
   const isMac = () => S.info.platform === 'darwin';
   const view = $('#view');
@@ -25,6 +25,8 @@
     up: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>',
     dl: '<svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg>',
     search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>',
+    tag: '<svg viewBox="0 0 24 24"><path d="M3.5 12.6V5a1.5 1.5 0 0 1 1.5-1.5h7.6L20.5 11.4a1.5 1.5 0 0 1 0 2.1l-7 7a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.3"/></svg>',
+    back: '<svg viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"/></svg>',
     trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.8h6V7M6.5 7l1 13h9l1-13"/></svg>',
   };
 
@@ -147,6 +149,42 @@
   });
   $('#q').addEventListener('focus', () => jelly($('#search-wrap'), 0.35));
 
+  // ---------- juice: confetti burst, click ripples, 3D tilt ----------
+  function burst(el, n = 14) {
+    if (REDUCE || !el || !el.getBoundingClientRect) return;
+    const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const cols = ['#7C5CFF', '#4F7BFF', '#22D3EE', '#34d399', '#f472b6', '#fbbf24'];
+    for (let i = 0; i < n; i++) {
+      const d = document.createElement('i'); d.className = 'bit';
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.5, dist = 46 + Math.random() * 70, s = 5 + Math.random() * 6;
+      d.style.cssText = `left:${cx}px;top:${cy}px;width:${s}px;height:${s}px;background:${cols[i % cols.length]};border-radius:${Math.random() > 0.5 ? '50%' : '2px'}`;
+      document.body.appendChild(d);
+      d.animate([{ transform: 'translate(-50%,-50%) scale(0)', opacity: 1 }, { transform: `translate(calc(-50% + ${Math.cos(a) * dist}px), calc(-50% + ${Math.sin(a) * dist}px)) scale(1.2) rotate(${Math.random() * 360}deg)`, opacity: 1, offset: 0.55 }, { transform: `translate(calc(-50% + ${Math.cos(a) * dist * 1.15}px), calc(-50% + ${Math.sin(a) * dist * 1.15 + 34}px)) scale(0) rotate(${Math.random() * 720}deg)`, opacity: 0 }], { duration: 850 + Math.random() * 350, easing: 'cubic-bezier(.15,.8,.3,1)' }).onfinish = () => d.remove();
+    }
+  }
+  document.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('.btn, .nav-btn, .pack, .chip.tog'); if (!b || REDUCE) return;
+    const r = b.getBoundingClientRect(), w = document.createElement('i'); w.className = 'rip';
+    const size = Math.max(r.width, r.height) * 2.2;
+    w.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+    if (getComputedStyle(b).position === 'static') b.style.position = 'relative';
+    b.appendChild(w);
+    w.animate([{ transform: 'scale(0)', opacity: 0.35 }, { transform: 'scale(1)', opacity: 0 }], { duration: 620, easing: 'cubic-bezier(.2,.7,.2,1)' }).onfinish = () => w.remove();
+  });
+  // cards and packs lean toward the cursor, and spring flat when it leaves
+  document.addEventListener('pointermove', (e) => {
+    const c = e.target.closest && e.target.closest('.card, .pack'); if (!c || REDUCE) return;
+    const r = c.getBoundingClientRect(), px = (e.clientX - r.left) / r.width - 0.5, py = (e.clientY - r.top) / r.height - 0.5;
+    c.style.setProperty('--ry', (px * 9).toFixed(2) + 'deg'); c.style.setProperty('--rx', (-py * 9).toFixed(2) + 'deg');
+  });
+  document.addEventListener('pointerout', (e) => {
+    const c = e.target.closest && e.target.closest('.card, .pack'); if (!c || c.contains(e.relatedTarget)) return;
+    c.style.setProperty('--ry', '0deg'); c.style.setProperty('--rx', '0deg');
+  });
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && ['1', '2', '3', '4', '5', '6'].includes(e.key)) { e.preventDefault(); const b = $$('.nav-btn')[+e.key - 1]; if (b) { b.click(); jelly(b, 0.8); } }
+  });
+
   // ---------- action button ----------
   function actionHTML(it, extraClass = '') {
     const id = esc(it.id);
@@ -161,7 +199,7 @@
     if (j && j.state === 'error') return `<button class="btn btn-bad${cls}" data-act="${id}" data-do="${j.verb === 'update' ? 'update' : 'get'}" title="${esc(j.msg)}">Retry</button>`;
     if (updateFor(it.id) && !(j && j.state === 'done' && j.verb !== 'uninstall')) return `<button class="btn btn-solid${cls}" data-act="${id}" data-do="update">Update</button>`;
     if (isInstalled(it)) return isMac() ? `<button class="btn btn-ok${cls}" data-act="${id}" data-do="open">Open</button>` : `<button class="btn btn-ok${cls}" data-act="${id}" data-do="detail">${I.check}Installed</button>`;
-    return `<button class="btn btn-get${cls}" data-act="${id}" data-do="get">Get</button>`;
+    return `<button class="btn btn-get${cls}" data-act="${id}" data-do="get"${it.price === 'paid' ? ' title="Downloads the official trial"' : ''}>${it.price === 'paid' ? 'Trial' : 'Get'}</button>`;
   }
   function refreshActions(itemId) {
     for (const b of $$(`[data-act="${sel(itemId)}"]`)) {
@@ -230,7 +268,7 @@
       for (const e of es) if (e.isIntersecting) { e.target.style.setProperty('--d', (k++ % 14) * 38 + 'ms'); e.target.classList.add('on'); io.unobserve(e.target); }
     }, { root: view, threshold: 0.06, rootMargin: '0px 0px 40px 0px' });
     function reveal(root) {
-      for (const el of $$('.card, .rowi, .dl, .urlcard', root)) { if (reduce) continue; el.classList.add('rv'); io.observe(el); }
+      for (const el of $$('.card, .rowi, .dl, .urlcard, .pack', root)) { if (reduce) continue; el.classList.add('rv'); io.observe(el); }
       magnet(root);
     }
     function magnet(root) {
@@ -260,13 +298,28 @@
   })();
 
   // ---------- views ----------
+  const PRICE = { paid: ['Paid', 'Costs money. You get the official trial, then buy it from the developer.'], sub: ['Subscription', 'Needs a paid subscription from the developer.'] };
+  function priceHTML(it) { const p = PRICE[it.price]; return p ? `<span class="pill price ${it.price}" title="${esc(p[1])}">${I.tag}${p[0]}</span>` : ''; }
+  const freeFilter = (list) => (S.freeOnly ? list.filter(it => !it.price) : list);
+  function freeToggle() { return `<button class="chip tog${S.freeOnly ? ' on' : ''}" data-free>${I.tag}Free apps only</button>`; }
+  function packCardHTML(p, i) {
+    const icons = p.items.slice(0, 4).map(iconHTML).join('');
+    return `<div class="pack clickable" data-pack="${esc(p.id)}" style="--h:${p.hue};--d:${i * 60}ms"><div class="pack-ic">${icons}</div><div class="pack-t">${esc(p.name)}</div><div class="pack-b">${esc(p.blurb)} · ${p.items.length} apps</div></div>`;
+  }
+  function renderPack(p) {
+    remember(p.items);
+    const todo = p.items.filter(it => !isInstalled(it) && !it.price);
+    setView(`<div class="hero pack-hero" style="--h:${p.hue}"><button class="btn btn-ghost" data-pack-back>${I.back} Back</button><h1>${esc(p.name)}</h1><p>${esc(p.blurb)}. ${p.items.length} apps, one click.</p>
+      <div style="margin-top:16px"><button class="btn btn-solid big" data-pack-all="${esc(p.id)}"${todo.length ? '' : ' disabled'}>${I.dl} ${todo.length ? `Get all ${todo.length}` : 'All installed'}</button></div></div>
+      <div class="grid">${p.items.map(cardHTML).join('')}</div>`);
+  }
   function cardHTML(it, i) {
     remember([it]);
     const d = Math.min(i, 18) * 22;
     return `<div class="card clickable" data-open="${esc(it.id)}" style="animation-delay:${d}ms">
       ${iconHTML(it)}
       <div class="meta"><div class="name">${esc(it.name)}</div><div class="desc">${esc(subLine(it))}</div>
-      <div class="row"><span class="ver">${esc(verLabel(it))}</span>${it.label ? `<span class="pill kindp">${esc(it.label)}</span>` : ''}${actionHTML(it)}</div></div></div>`;
+      <div class="row"><span class="ver">${esc(verLabel(it))}</span>${it.label ? `<span class="pill kindp">${esc(it.label)}</span>` : ''}${priceHTML(it)}${actionHTML(it)}</div></div></div>`;
   }
   function rowHTML(it, i, right) {
     remember([it]);
@@ -292,15 +345,19 @@
     }
     if (q) {
       if (!S.cat.ready) { setView(loadingHTML()); return; }
+      const shown = freeFilter(S.results);
+      if (S.results.length && !shown.length) { setView(`<div class="h2"><h2>Results</h2>${freeToggle()}</div><div class="empty">${I.tag}<div class="big">Only paid apps match "${esc(q)}"</div><div>Turn off "Free apps only" to see them.</div></div>`); return; }
       if (!S.results.length) { setView(`<div class="empty">${I.search}<div class="big">Nothing called "${esc(q)}"</div><div>Try another name, or paste a direct download link.</div></div>`); return; }
-      setView(`<div class="h2"><h2>Results</h2><span class="sub">${S.results.length >= 60 ? 'Top 60' : S.results.length} for "${esc(q)}"</span></div><div class="grid">${S.results.map(cardHTML).join('')}</div>`);
+      setView(`<div class="h2"><h2>Results <span class="sub">${S.results.length >= 60 ? 'top 60' : shown.length} for "${esc(q)}"</span></h2>${freeToggle()}</div><div class="grid">${shown.map(cardHTML).join('')}</div>`);
       return;
     }
     const hero = `<div class="hero"><h1>${['Get', 'any', 'app.'].map((w, i) => `<span class="w" style="--i:${i}">${w}</span> `).join('')}<span class="g w" style="--i:3">One click.</span></h1><p>Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.</p>
       <div class="chips"><span class="chip">${I.shield}${isMac() ? 'Checksums verified' : 'Hash-checked by winget'}</span><span class="chip">${I.bolt}No browser, no fake buttons</span><span class="chip">${I.box}${S.cat.ready ? `<b data-count="${S.cat.count}">0</b>&nbsp;apps` : 'Thousands of apps'}</span></div></div>`;
     if (S.cat.error) { setView(hero + `<div class="empty">${I.globe}<div class="big">Can't reach the catalog</div><div>${esc(S.cat.error)}</div><div style="margin-top:14px"><button class="btn btn-solid" data-retry-cat>Try again</button></div></div>`); return; }
     if (!S.cat.ready) { setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2></div><div class="grid">${'<div class="skel"></div>'.repeat(12)}</div>`); return; }
-    setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2><span class="sub">Most grabbed</span></div><div class="grid">${S.cat.popular.map(cardHTML).join('')}</div>`);
+    if (S.pack) { const p = S.packs.find(x => x.id === S.pack); if (p) return renderPack(p); S.pack = null; }
+    const packs = S.packs.length ? `<div class="h2"><h2>Starter packs</h2><span class="sub">A whole setup in one click</span></div><div class="packs">${S.packs.map(packCardHTML).join('')}</div>` : '';
+    setView(hero + wingetNote() + packs + `<div class="h2"><h2>Popular</h2>${freeToggle()}</div><div class="grid">${freeFilter(S.cat.popular).map(cardHTML).join('')}</div>`);
   }
   function loadingHTML(t = 'Loading the app catalog') { return `<div class="empty"><div class="spinner"></div><div class="big">${esc(t)}</div><div>First launch takes a few seconds.</div></div>`; }
 
@@ -346,7 +403,7 @@
   function renderDownloads() {
     const list = [...S.jobsById.values()].sort((a, b) => b.created - a.created);
     if (!list.length) { setView(`<div class="hero"><h1>Downloads</h1></div><div class="empty">${I.dl}<div class="big">Nothing downloading</div><div>Hit Get on any app and it shows up here.</div></div>`); return; }
-    setView(`<div class="hero"><h1>Downloads</h1></div><div class="list">${list.map((j, i) => { const r = dlRowInner(j); return `<div class="${r.cls}" data-dl="${j.id}" style="animation-delay:${i * 25}ms">${r.html}</div>`; }).join('')}</div>`);
+    setView(`<div class="hero"><h1>Downloads</h1></div>${list.some(j => ['done', 'error', 'canceled'].includes(j.state)) ? `<div class="h2"><h2></h2><button class="btn btn-ghost" data-clear-done>Clear finished</button></div>` : ''}<div class="list">${list.map((j, i) => { const r = dlRowInner(j); return `<div class="${r.cls}" data-dl="${j.id}" style="animation-delay:${i * 25}ms">${r.html}</div>`; }).join('')}</div>`);
   }
   function patchDownloadRow(j) {
     const row = $(`[data-dl="${j.id}"]`);
@@ -361,20 +418,50 @@
     if (acts.innerHTML !== nacts.innerHTML) acts.innerHTML = nacts.innerHTML;
   }
 
+  // ---------- saved apps + settings ----------
+  const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+  S.saved = new Set(store.get('grab-saved', []));
+  S.savedItems = null;
+  const heart = (on) => `<svg viewBox="0 0 24 24" style="${on ? 'fill:#f472b6;stroke:#f472b6' : ''}"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>`;
+  function saveBtn(id) { const on = S.saved.has(id); return `<button class="btn big${on ? ' saved-on' : ''}" data-save="${esc(id)}">${heart(on)} ${on ? 'Saved' : 'Save'}</button>`; }
+  async function renderSaved() {
+    if (!S.saved.size) { setView(`<div class="hero"><h1>Saved</h1></div><div class="empty">${heart(false)}<div class="big">Nothing saved yet</div><div>Open any app and hit Save to keep it here for later.</div></div>`); return; }
+    if (!S.savedItems) { setView(loadingHTML('Loading your saved apps')); S.savedItems = remember(await G.getMany([...S.saved])); if (S.view !== 'saved') return; }
+    const list = S.savedItems.filter(it => S.saved.has(it.id));
+    const todo = list.filter(it => !isInstalled(it) && !it.price);
+    setView(`<div class="hero"><h1>Saved</h1><p>${list.length} app${list.length === 1 ? '' : 's'} you want to grab later.</p></div>
+      <div class="h2"><h2></h2><button class="btn btn-solid" data-saved-all${todo.length ? '' : ' disabled'}>${I.dl} ${todo.length ? `Get all ${todo.length}` : 'All installed'}</button></div>
+      <div class="grid">${list.map(cardHTML).join('')}</div>`);
+  }
+  const THEMES = { violet: ['#7C5CFF', '#4F7BFF', '#22D3EE'], sunset: ['#FF5C8A', '#FF8A4F', '#FBBF24'], mint: ['#10B981', '#22D3EE', '#4F7BFF'], candy: ['#F472B6', '#A855F7', '#60A5FA'], lime: ['#84CC16', '#22C55E', '#14B8A6'] };
+  function applyTheme(name) { const t = THEMES[name] || THEMES.violet; ['--a1', '--a2', '--a3'].forEach((k, i) => RS.setProperty(k, t[i])); store.set('grab-theme', name); S.theme = name; }
+  applyTheme(store.get('grab-theme', 'violet'));
+  function renderSettings() {
+    const mod = isMac() ? '⌘' : 'Ctrl ';
+    setView(`<div class="hero"><h1>Settings</h1></div>
+      <div class="set"><div><b>Colour</b><span>Pick the vibe for the whole app</span></div><div class="swatches">${Object.entries(THEMES).map(([k, c]) => `<button class="sw${S.theme === k ? ' on' : ''}" data-theme="${k}" title="${k}" style="background:linear-gradient(135deg,${c.join(',')})"></button>`).join('')}</div></div>
+      <div class="set"><div><b>Free apps only</b><span>Hide apps Grab knows cost money</span></div>${freeToggle()}</div>
+      <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates install themselves in the background</span></div><button class="btn" data-upd-check>Check for updates</button></div>
+      <div class="set"><div><b>Shortcuts</b><span>${mod}K search · ${mod}1 to ${mod}6 switch tabs · Esc close</span></div></div>
+      <div class="set"><div><b>About prices</b><span>Grab only downloads official versions from the developer. Paid apps arrive as their normal trial, and you buy them from the developer. Only well-known paid apps are labelled, so an app with no label is not guaranteed to be free.</span></div></div>`);
+  }
   function render() {
     $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
     fluid.nav();
     if (S.view === 'discover') renderDiscover();
     else if (S.view === 'updates') renderUpdates();
     else if (S.view === 'installed') renderInstalled();
+    else if (S.view === 'saved') renderSaved();
+    else if (S.view === 'settings') renderSettings();
     else renderDownloads();
   }
-  function go(v) { if (S.view === v) return; S.view = v; fluid.jump(0); render(); }
+  function go(v) { if (S.view === v && !S.pack) return; S.pack = null; S.view = v; fluid.jump(0); render(); }
 
   function badges() {
     const nUp = S.scan ? S.scan.filter(s => s.update && !(S.jobsByItem.get(s.id) && S.jobsByItem.get(s.id).state === 'done')).length : 0;
     const bu = $('#badge-updates'); if (bu.textContent !== String(nUp) && nUp) jelly(bu, 2); bu.textContent = nUp; bu.classList.toggle('show', nUp > 0);
     const nDl = [...S.jobsById.values()].filter(j => ['queued', 'downloading', 'installing', 'needs-quit'].includes(j.state)).length;
+    const bs = $('#badge-saved'); if (bs) { const n = S.saved ? S.saved.size : 0; bs.textContent = n; bs.classList.toggle('show', n > 0); }
     const bd = $('#badge-downloads'); if (bd.textContent !== String(nDl) && nDl) jelly(bd, 2); bd.textContent = nDl; bd.classList.toggle('show', nDl > 0);
   }
   function foot() {
@@ -399,11 +486,13 @@
     sh.innerHTML = `<button class="btn btn-ghost close" data-close>${I.x}</button>
       <div class="head">${iconHTML(it)}<div style="min-width:0"><h3>${esc(it.name)}</h3><div class="pub">${esc(isMac() ? (it.host || '') : (it.publisher || ''))}</div></div></div>
       ${isMac() && it.desc ? `<p class="about">${esc(it.desc)}</p>` : ''}
-      <div class="actions">${actionHTML(it, 'big')}${it.home ? `<button class="btn big" data-ext="${esc(it.home)}">${I.globe} Website</button>` : ''}${inst ? `<button class="btn btn-ghost big" data-remove="${esc(it.id)}">${I.trash} ${isMac() ? 'Move to Trash' : 'Uninstall'}</button>` : ''}</div>
+      <div class="actions">${actionHTML(it, 'big')}${saveBtn(it.id)}${it.home ? `<button class="btn big" data-ext="${esc(it.home)}">${I.globe} Website</button>` : ''}${inst ? `<button class="btn btn-ghost big" data-remove="${esc(it.id)}">${I.trash} ${isMac() ? 'Move to Trash' : 'Uninstall'}</button>` : ''}</div>
+      ${it.price ? `<div class="paynote">${I.tag}<div><b>${it.price === 'sub' ? 'This app needs a paid subscription.' : 'This app costs money.'}</b> Grab downloads the official version straight from the developer${it.price === 'sub' ? '' : ', which usually starts as a free trial'}. To keep using it, buy it from them.${it.home ? ` <span class="link" data-ext="${esc(it.home)}">Buy from the developer</span>` : ''}</div></div>` : ''}
       <div class="facts">
         <div class="fact"><span>Latest version</span><span>${esc(String(it.ver || '').split(',')[0] || 'n/a')}</span></div>
         ${sc && sc.installedVer ? `<div class="fact"><span>Installed</span><span>${esc(sc.installedVer)}</span></div>` : ''}
         ${isMac() ? `<div class="fact"><span>Downloads from</span><span>${esc(it.host)}</span></div>` : ''}
+        <div class="fact"><span>Price</span><span>${it.price === 'paid' ? 'Paid (trial download)' : it.price === 'sub' ? 'Subscription' : 'No price listed'}</span></div>
         <div class="fact"><span>ID</span><span>${esc(it.id)}</span></div>
         ${it.deprecated ? `<div class="fact"><span>Status</span><span style="color:var(--warn)">No longer maintained</span></div>` : ''}
       </div>
@@ -442,11 +531,31 @@
   }
 
   document.addEventListener('click', async (e) => {
-    const t = e.target.closest('button, [data-open], .nav-btn');
+    const t = e.target.closest('button, [data-open], [data-pack], [data-ext], .nav-btn');
     if (!t) return;
     if (t.matches('.nav-btn')) { go(t.dataset.view); return; }
     if (t.dataset.act) { e.stopPropagation(); doAct(t.dataset.act, t.dataset.do, t.dataset.job); return; }
     if (t.dataset.ext) { G.external(t.dataset.ext); return; }
+    if (t.dataset.save) {
+      const id = t.dataset.save; if (S.saved.has(id)) S.saved.delete(id); else { S.saved.add(id); burst(t, 10); }
+      store.set('grab-saved', [...S.saved]); S.savedItems = null;
+      const nb = document.createElement('div'); nb.innerHTML = saveBtn(id); t.replaceWith(nb.firstElementChild); jelly($(`[data-save="${sel(id)}"]`), 1.5);
+      badges(); if (S.view === 'saved') render(); return;
+    }
+    if (t.dataset.savedAll != null) { const todo = (S.savedItems || []).filter(it => S.saved.has(it.id) && !isInstalled(S.items.get(it.id) || it) && !it.price); for (const it of todo) { try { await G.install(it.id); } catch {} } burst(t, 22); toast(`Grabbing ${todo.length} app${todo.length === 1 ? '' : 's'}`); t.disabled = true; return; }
+    if (t.dataset.theme) { applyTheme(t.dataset.theme); render(); burst($(`[data-theme="${t.dataset.theme}"]`), 12); return; }
+    if (t.dataset.updCheck != null) { t.disabled = true; t.textContent = 'Checking'; const u = await G.updCheck().catch(() => null); const line = $('#upd-line'); if (line) line.textContent = !u ? 'Could not check right now' : u.status === 'uptodate' ? 'You have the latest version' : ['available', 'downloading', 'unpacking', 'ready'].includes(u.status) ? `Grab ${String(u.latest || '').replace(/^v/, '')} is on its way` : u.error || 'Could not check right now'; t.disabled = false; t.textContent = 'Check for updates'; return; }
+    if (t.dataset.free != null) { S.freeOnly = !S.freeOnly; try { localStorage.setItem('grab-free', S.freeOnly ? '1' : '0'); } catch {} render(); return; }
+    if (t.dataset.packBack != null) { S.pack = null; fluid.jump(0); render(); return; }
+    if (t.dataset.packAll) {
+      const p = S.packs.find(x => x.id === t.dataset.packAll); if (!p) return;
+      const todo = p.items.filter(it => !isInstalled(S.items.get(it.id) || it) && !it.price);
+      for (const it of todo) { try { await G.install(it.id); } catch {} }
+      burst(t, 22); toast(`Grabbing ${todo.length} app${todo.length === 1 ? '' : 's'}`); t.disabled = true;
+      return;
+    }
+    if (t.dataset.clearDone != null) { for (const j of [...S.jobsById.values()]) if (['done', 'error', 'canceled'].includes(j.state)) { await G.dismiss(j.id); S.jobsById.delete(j.id); if (S.jobsByItem.get(j.itemId) === j) S.jobsByItem.delete(j.itemId); } renderDownloads(); badges(); return; }
+    if (t.dataset.pack) { S.pack = t.dataset.pack; fluid.jump(0); render(); return; }
     if (t.dataset.url != null) { try { await G.installUrl(t.dataset.url); toast('Downloading from link'); go('downloads'); } catch (err) { toast('That link does not look right', true); } return; }
     if (t.dataset.cancel) { G.cancel(Number(t.dataset.cancel)); return; }
     if (t.dataset.resume) { G.resume(Number(t.dataset.resume)); return; }
@@ -493,6 +602,7 @@
     else S.results = [];
     if (my !== qSeq) return;
     if (S.view !== 'discover') S.view = 'discover';
+    if (q) S.pack = null;
     fluid.jump(0);
     render();
   }
@@ -508,12 +618,13 @@
   });
 
   // ---------- events from main ----------
-  G.onCatalog((c) => { S.cat = c; remember(c.popular); foot(); if (S.view === 'discover') { if (S.q) runSearch(); else render(); } });
+  G.onCatalog((c) => { S.cat = c; if (c.ready) G.packs().then(p => { S.packs = p || []; for (const x of S.packs) remember(x.items); if (S.view === 'discover' && !S.q) render(); }).catch(() => {}); remember(c.popular); foot(); if (S.view === 'discover') { if (S.q) runSearch(); else render(); } });
   G.onScan((list) => { S.scan = remember(list); S.removed.clear(); for (const s of list) S.installed.add(s.id); badges(); if (S.view === 'updates' || S.view === 'installed') render(); else for (const s of list) refreshActions(s.id); });
   G.onJob((j) => {
     const prev = S.jobsById.get(j.id);
     S.jobsById.set(j.id, j);
     S.jobsByItem.set(j.itemId, j);
+    if (j.state === 'done' && (!prev || prev.state !== 'done') && j.verb !== 'uninstall') setTimeout(() => { const b = $(`[data-act="${sel(j.itemId)}"]`); if (b) burst(b, 16); }, 60);
     if (j.state === 'done' && (!prev || prev.state !== 'done')) {
       if (j.verb === 'uninstall') { S.installed.delete(j.itemId); S.removed.add(j.itemId); toast(`${j.name} removed`); }
       else {
@@ -558,6 +669,7 @@
     for (const j of await G.jobs()) { S.jobsById.set(j.id, j); S.jobsByItem.set(j.itemId, j); }
     foot(); render(); badges();
     G.scan(false).then(list => { if (list && list.length) { S.scan = remember(list); for (const s of list) S.installed.add(s.id); badges(); if (S.view !== 'discover') render(); else for (const s of list) refreshActions(s.id); } }).catch(() => {});
+    if (S.cat.ready) G.packs().then(p => { S.packs = p || []; for (const x of S.packs) remember(x.items); if (S.view === 'discover' && !S.q) render(); }).catch(() => {});
     G.updState().then(renderUpd).catch(() => {});
     G.ready();
   })().catch(e => { console.error('boot failed', e); G.ready(); });
