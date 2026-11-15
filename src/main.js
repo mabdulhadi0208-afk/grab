@@ -136,7 +136,7 @@ function checkedIcon(url) {
     try { const st = fs.statSync(file); if (Date.now() - st.mtimeMs < 14 * 86400e3) return 'data:image/png;base64,' + fs.readFileSync(file).toString('base64'); } catch {}
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
     try {
-      const r = await net.fetch(fixIconUrl(url), { headers: { 'User-Agent': U.BROWSER_UA, Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' }, signal: ctl.signal });
+      const r = await net.fetch(fixIconUrl(url), { headers: { 'User-Agent': U.BROWSER_UA, Accept: 'image/png,image/jpeg,image/*;q=0.6,*/*;q=0.3' }, signal: ctl.signal });
       if (!r.ok) return null;
       const type = (r.headers.get('content-type') || '').split(';')[0];
       const buf = Buffer.from(await r.arrayBuffer());
