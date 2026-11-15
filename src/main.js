@@ -75,7 +75,7 @@ function favHost(it, home) {
   const n = sq(it.name), f = sq(String(it.name).split(/\s+/)[0]);
   if (IS_MAC) {
     const t = sq(String(it.id).split('@')[0]);
-    if (String(it.id).includes('@')) return ''; // beta / nightly builds have their own icons
+    if (/@(?!\d)/.test(String(it.id))) return ''; // beta / nightly builds have their own icons; pinned versions (@6) are the same app
     if (L === n || L === t) return host;
     if (hostCount.get(host) !== 1) return '';
     return ((f.length >= 3 && L === f) || (L.length >= 4 && (n.includes(L) || t.includes(L))) || (f.length >= 4 && L.includes(f))) ? host : '';
@@ -87,9 +87,13 @@ function macIcons(it) {
   if (!IS_MAC || !it || String(it.id).startsWith('url:')) return [];
   if (!['app', 'suite', 'pkg', 'installer'].includes(it.kind || 'app')) return [];
   const cask = (t) => `https://github.com/App-Fair/appcasks/releases/download/cask-${encodeURIComponent(t)}/AppIcon.png`;
-  const out = [cask(it.id), ...(it.old || []).map(cask)];
+  const [base, variant] = String(it.id).split('@');
+  const out = [cask(it.id)];
+  if (variant && /^\d/.test(variant)) out.push(cask(base)); // a pinned older version of the same app
+  // an earlier name for the same app. Skipped when the names are unrelated: that is a rebrand, and the old icon would be out of date.
+  for (const o of it.old || []) { const a = sq(o.split('@')[0]), b = sq(base); if (a && (a.includes(b) || b.includes(a))) out.push(cask(o)); }
   // last resort: an open icon library, exact name match only
-  if (!String(it.id).includes('@')) out.push(`https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/png/${encodeURIComponent(it.id)}.png`);
+  if (!variant) out.push(`https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/png/${encodeURIComponent(it.id)}.png`);
   return out;
 }
 const favCache = new Map();
@@ -108,6 +112,48 @@ async function favicon(host) {
     } catch { return null; }
   })();
   favCache.set(host, p);
+  return p;
+}
+// Windows icons are fetched and checked here before they are shown. A full scan of the icon database (Nov 2026, 5,945 icons)
+// found three problems, all handled below instead of trusting the link:
+//  1. some hosts answer a dead link with a stand-in picture (Chocolatey's default package icon, imgbox's "unavailable" card):
+//     those exact pictures are recognised by their hash and rejected;
+//  2. Wikimedia now only serves thumbnails in fixed widths, so 106 links (VS Code, Steam, OBS...) failed until rewritten;
+//  3. about 640 links are simply dead (404): rejected, so the next source or the letter tile is used.
+const PLACEHOLDER_ICONS = new Set(['693aa33962ac1694', 'ab3e519d5cb65da1', '9a238bfd76905c37', '473c989e5f8a73d4', '164b08c82eea42e6']);
+function fixIconUrl(u) {
+  try { const x = new URL(u); if (x.hostname === 'upload.wikimedia.org' && x.pathname.includes('/thumb/')) { x.pathname = x.pathname.replace(/\/(\w+-)?\d+px-([^/]+)$/, '/$1250px-$2'); return x.href; } } catch {}
+  return u;
+}
+const iconDataCache = new Map();
+function iconDir() { const d = path.join(app.getPath('userData'), 'icons'); try { fs.mkdirSync(d, { recursive: true }); } catch {} return d; }
+function checkedIcon(url) {
+  if (!/^https:\/\//.test(String(url || ''))) return Promise.resolve(null);
+  if (iconDataCache.has(url)) return iconDataCache.get(url);
+  const p = (async () => {
+    const crypto = require('crypto');
+    const file = path.join(iconDir(), crypto.createHash('sha1').update(url).digest('hex') + '.png');
+    try { const st = fs.statSync(file); if (Date.now() - st.mtimeMs < 14 * 86400e3) return 'data:image/png;base64,' + fs.readFileSync(file).toString('base64'); } catch {}
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const r = await net.fetch(fixIconUrl(url), { headers: { 'User-Agent': U.BROWSER_UA, Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' }, signal: ctl.signal });
+      if (!r.ok) return null;
+      const type = (r.headers.get('content-type') || '').split(';')[0];
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length < 150 || buf.length > 4000000 || /text\/html/.test(type)) return null;
+      if (PLACEHOLDER_ICONS.has(crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16))) return null;
+      const { nativeImage } = require('electron');
+      const img = nativeImage.createFromBuffer(buf);
+      if (!img.isEmpty()) {
+        const sz = img.getSize(); if (sz.width < 24 || sz.height < 24) return null;
+        const png = img.resize({ width: 128, height: Math.max(1, Math.round(128 * sz.height / sz.width)), quality: 'best' }).toPNG();
+        try { fs.writeFileSync(file, png); } catch {}
+        return 'data:image/png;base64,' + png.toString('base64');
+      }
+      return /^image\/(svg\+xml|webp|gif|x-icon|vnd\.microsoft\.icon)$/.test(type) && buf.length < 300000 ? `data:${type};base64,${buf.toString('base64')}` : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  })();
+  iconDataCache.set(url, p);
   return p;
 }
 const winKeyCount = new Map();
@@ -426,7 +472,9 @@ ipcMain.handle('meta', async (_e, id) => {
   id = String(id);
   const [m, icons] = await Promise.all([winMeta(id).catch(() => null), winIcons().catch(() => ({}))]);
   const it = catalog.byId.get(id);
-  return { ...(m || {}), icon: (m && m.icon) || winIconFor(id, icons), fav: it && m ? favHost(it, m.home) : '' };
+  let icon = null;
+  for (const u of [m && m.icon, winIconFor(id, icons)]) { if (u && (icon = await checkedIcon(u))) break; }
+  return { ...(m || {}), icon: icon || '', fav: it && m ? favHost(it, m.home) : '' };
 });
 ipcMain.handle('fav', (_e, host) => favicon(host));
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
@@ -555,6 +603,9 @@ async function runSelfTest() {
       const icons = await winIcons();
       check(Object.keys(icons).length > 3000, `icon database loaded (${Object.keys(icons).length} icons)`);
       for (const id of ['Google.Chrome', '7zip.7zip', 'Microsoft.VisualStudioCode', 'Python.Python.3.13', 'Discord.Discord', 'Valve.Steam']) check(!!winIconFor(id, icons), `real app icon for ${id}`);
+      check(fixIconUrl('https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/512px-Steam_icon_logo.svg.png').endsWith('/250px-Steam_icon_logo.svg.png') && fixIconUrl('https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/V.svg/langfr-800px-V.svg.png').endsWith('/langfr-250px-V.svg.png'), 'Wikimedia links rewritten to a supported size');
+      for (const id of ['Microsoft.VisualStudioCode', 'Valve.Steam', 'OBSProject.OBSStudio', 'BlenderFoundation.Blender', 'Google.Chrome']) { const d = await checkedIcon(winIconFor(id, icons)); check(!!d, `icon really downloads for ${id}`); }
+      for (const id of ['Brave.Brave', 'OpenAI.ChatGPT', 'Insomnia.Insomnia']) { const u = winIconFor(id, icons); const d = u ? await checkedIcon(u) : null; check(!d, `stand-in picture rejected for ${id}`); }
       let shared = 0, dropped = 0;
       for (const it of catalog.items) { const k = winIconKey(it.id); if (icons[k] && winKeyCount.get(k) > 1) { shared++; if (!winIconFor(it.id, icons)) dropped++; } }
       U.log(`icon name clashes: ${shared} apps share an icon name with another publisher, ${dropped} of them now show a letter instead of someone else's icon`);
@@ -648,7 +699,9 @@ async function runAudit() {
     }
     for (const [src, u] of chain) {
       let b64 = null;
-      if (src === 'site') { const d = await favicon(u); b64 = d ? thumb(Buffer.from(d.split(',')[1], 'base64')) : null; } else b64 = await fetchImg(u);
+      if (src === 'site') { const d = await favicon(u); b64 = d ? thumb(Buffer.from(d.split(',')[1], 'base64')) : null; }
+      else if (IS_WIN) { const d = await checkedIcon(u); b64 = d && d.startsWith('data:image/png') ? thumb(Buffer.from(d.split(',')[1], 'base64')) : (d ? 'RAW' : null); }
+      else b64 = await fetchImg(u);
       if (b64) { row.src = src; row.url = u; row.b64 = b64; break; }
     }
     return row;

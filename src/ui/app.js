@@ -50,9 +50,9 @@
   }
   // Icon sources, best first: winget's own icon, GitHub owner avatar (for GitHub-hosted apps), Google's favicon service, DuckDuckGo, Google s2.
   const metaCache = new Map();
-  const iconMem = (() => { try { return JSON.parse(localStorage.getItem('grab-icons-v3') || '{}'); } catch { return {}; } })();
+  const iconMem = (() => { try { return JSON.parse(localStorage.getItem('grab-icons-v4') || '{}'); } catch { return {}; } })();
   let iconMemT = null;
-  function iconRemember(id, url) { if (!id) return; iconMem[id] = url; clearTimeout(iconMemT); iconMemT = setTimeout(() => { try { localStorage.setItem('grab-icons-v3', JSON.stringify(iconMem)); } catch {} }, 800); }
+  function iconRemember(id, url) { if (!id || String(url).startsWith('data:')) return; iconMem[id] = url; clearTimeout(iconMemT); iconMemT = setTimeout(() => { try { localStorage.setItem('grab-icons-v4', JSON.stringify(iconMem)); } catch {} }, 800); }
   function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } }
   // Sources in order: the app's real icon(s), then its own site's logo (main decides if that's allowed and checks it exists).
   function markReal(box, img) { img.classList.add('real'); box.classList.add('has-real'); }
