@@ -469,6 +469,7 @@ async function runSelfTest() {
     const pop = catalogInfo().popular;
     check(pop.length >= 15, `popular list resolves (${pop.length})`);
   });
+  if (SELFTEST === 'iconscan') { await runIconScan().catch(e => U.log('SCAN CRASH', e)); app.exit(0); return; }
   if (SELFTEST === 'audit') { await runAudit().catch(e => U.log('AUDIT CRASH', e)); app.exit(0); return; }
   if (SELFTEST === 'swap') {
     await T('swap', async () => {
@@ -656,4 +657,33 @@ async function runAudit() {
   U.log('audit sources ' + JSON.stringify(tally));
   fs.writeFileSync(out, JSON.stringify(rows));
   U.log('audit written ' + out);
+}
+
+// Full scan of the Windows icon database (CI only): find dead links and hosts that answer with a placeholder picture.
+async function runIconScan() {
+  const crypto = require('crypto');
+  const { nativeImage } = require('electron');
+  const icons = await winIcons();
+  const entries = Object.entries(icons);
+  U.log('iconscan: ' + entries.length + ' icons');
+  const UA = { 'User-Agent': U.BROWSER_UA, Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' };
+  const one = async (url, headers) => {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 20000);
+    try {
+      const r = await net.fetch(url, { headers, signal: ctl.signal });
+      const buf = Buffer.from(await r.arrayBuffer());
+      let w = 0, h = 0; try { const im = nativeImage.createFromBuffer(buf); const sz = im.getSize(); w = sz.width; h = sz.height; } catch {}
+      return { st: r.status, type: (r.headers.get('content-type') || '').split(';')[0], len: buf.length, sha: crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16), w, h, fin: hostOf(r.url || url) };
+    } catch (e) { return { st: 0, err: String(e.message || e).slice(0, 60) }; } finally { clearTimeout(t); }
+  };
+  let n = 0;
+  const rows = await U.pool(entries, 24, async ([key, url]) => {
+    const a = await one(url, {});
+    const row = { key, url, a };
+    if (!(a.st === 200 && a.w > 0)) row.b = await one(url, UA);
+    if (++n % 500 === 0) U.log('iconscan ' + n);
+    return row;
+  });
+  fs.writeFileSync(process.env.GRAB_AUDIT_OUT || path.join(os.tmpdir(), 'scan.json'), JSON.stringify(rows));
+  U.log('iconscan written');
 }
