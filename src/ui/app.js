@@ -120,9 +120,9 @@
   const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // JELLY: damping ratio about 0.19, so every move overshoots by roughly half and wobbles five or more times before it settles.
   const LV = {
-    chill: { btn: 1.06, card: 1.02, soft: 1.01, tilt: 4, press: 0.94, mag: 0.12, K: 230, C: 17, skew: 1.2, band: 60, mk: 0.5, burst: 'cubic-bezier(.3,1.25,.5,1)' },
-    bouncy: { btn: 1.18, card: 1.05, soft: 1.02, tilt: 12, press: 0.82, mag: 0.3, K: 220, C: 9.5, skew: 4, band: 140, mk: 1, burst: 'cubic-bezier(.34,1.56,.64,1)' },
-    max: { btn: 1.5, card: 1.12, soft: 1.04, tilt: 25, press: 0.6, mag: 0.5, K: 210, C: 5.6, skew: 15, band: 300, mk: 1.7, burst: 'cubic-bezier(.3,2.4,.5,1)' },
+    chill: { pop: 0, btn: 1.06, card: 1.02, soft: 1.01, tilt: 4, press: 0.94, mag: 0.12, K: 230, C: 17, skew: 1.2, band: 60, mk: 0.5, burst: 'cubic-bezier(.3,1.25,.5,1)' },
+    bouncy: { pop: 3, btn: 1.18, card: 1.05, soft: 1.02, tilt: 12, press: 0.82, mag: 0.3, K: 220, C: 9.5, skew: 4, band: 140, mk: 1, burst: 'cubic-bezier(.34,1.56,.64,1)' },
+    max: { pop: 9, btn: 1.3, card: 1.07, soft: 1.03, tilt: 25, press: 0.6, mag: 0.5, K: 210, C: 5.6, skew: 15, band: 300, mk: 1.7, burst: 'cubic-bezier(.3,2.4,.5,1)' },
   };
   const SP = { jelly: null, bouncy: null, soft: springEasing(170, 24) };
   let L = LV.max, MK = 1.7, MLEVEL = 'max';
@@ -159,8 +159,8 @@
           if (idle) o.el.classList.remove('jx');
           act.delete(o); continue;
         }
-        // squash and stretch: whatever the size is doing right now, one axis leads and the other lags (up to 40%)
-        const d = Math.max(-0.4, Math.min(0.4, o.vs * 0.075));
+        // squash and stretch: whatever the size is doing right now, one axis leads and the other lags (up to 45%)
+        const d = Math.max(-0.45, Math.min(0.45, o.vs * 0.075));
         st.scale = `${Math.max(0.05, o.s * (1 + d)).toFixed(4)} ${Math.max(0.05, o.s * (1 - d)).toFixed(4)}`;
         st.translate = `${o.x.toFixed(2)}px ${o.y.toFixed(2)}px`;
         const a = Math.hypot(o.rx, o.ry);
@@ -198,6 +198,7 @@
       for (let el = e.target.closest && e.target.closest(ALL); el; el = el.parentElement && el.parentElement.closest(ALL)) {
         if (hov.has(el)) continue; hov.add(el);
         J.to(el, { ts: pressed === el ? L.press : rest(el) });
+        if (kind(el) === 'btn' && pressed !== el && L.pop) J.kick(el, { vs: L.pop }); // swings out to ~1.75x, then wobbles down to 1.3x
       }
     });
     document.addEventListener('pointerout', (e) => {
@@ -329,7 +330,7 @@
     // keyboard / scrollbar drags take over instantly
     view.addEventListener('pointerdown', (e) => { if (e.target === view) { wheeling = false; over = 0; } });
     addEventListener('keydown', (e) => { if (['PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', ' '].includes(e.key) && document.activeElement !== $('#q')) { wheeling = false; over = 0; } });
-    let mx = -999, my = -999, bx = -999, by = -999;
+    let mx = -999, my = -999, bx = -999, by = -999, skP = 0, skV = 0;
     main.addEventListener('pointermove', (e) => { const r = main.getBoundingClientRect(); mx = e.clientX - r.left; my = e.clientY - r.top; main.classList.add('hov');
       const c = e.target.closest && e.target.closest('.card');
       if (c) { const cr = c.getBoundingClientRect(); c.style.setProperty('--mx', (e.clientX - cr.left) + 'px'); c.style.setProperty('--my', (e.clientY - cr.top) + 'px'); }
@@ -354,7 +355,9 @@
       vel += ((top - lastTop - (over - overShown)) - vel) * 0.2; lastTop = top;
       // past either end the page stretches like rubber instead of stopping
       if (over !== overShown) { overShown = over; const vi = view.firstElementChild; if (vi) { vi.style.translate = over ? `0 ${over.toFixed(2)}px` : ''; vi.style.transformOrigin = over > 0 ? '50% 0' : '50% 100%'; vi.style.scale = over ? `1 ${(1 + Math.abs(over) / 1500).toFixed(4)}` : ''; } }
-      const sk = reduce ? 0 : Math.max(-L.skew, Math.min(L.skew, vel * -(L.skew / 40)));
+      // skew is itself a loose spring: it chases the speed-driven angle (max 15deg) and swings past it before settling
+      { const tk = reduce ? 0 : Math.max(-L.skew, Math.min(L.skew, vel * -(L.skew / 40))), n = 4, h = dt / n; for (let i = 0; i < n; i++) { skV += (L.K * (tk - skP) - L.C * skV) * h; skP += skV * h; } skP = Math.max(-L.skew * 1.7, Math.min(L.skew * 1.7, skP)); }
+      const sk = reduce ? 0 : skP;
       view.style.setProperty('--sk', sk.toFixed(3) + 'deg');
       // jelly wave: content lags behind the scroll column by column, overshoots, and settles
       const wt = reduce ? 0 : Math.max(-30, Math.min(30, vel * -1.2)) * MK;
