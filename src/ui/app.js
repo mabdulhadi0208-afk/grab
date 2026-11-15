@@ -121,9 +121,14 @@
   RS.setProperty('--jelly', SP.jelly.css); RS.setProperty('--bouncy', SP.bouncy.css); RS.setProperty('--soft', SP.soft.css);
   const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Squash-and-stretch wobble using the independent `scale` property, so it never fights transforms (hover, magnet, skew).
+  // Motion level: Chill 0.5, Bouncy 1, MAX 1.7 (default). Scales every wobble, wave and stretch.
+  const LEVELS = { chill: 0.5, bouncy: 1, max: 1.7 };
+  let MK = 1.7, MLEVEL = 'max';
+  function setMotion(name) { MLEVEL = LEVELS[name] ? name : 'max'; MK = LEVELS[MLEVEL]; RS.setProperty('--mk', MK); document.body.dataset.motion = MLEVEL; try { localStorage.setItem('grab-motion', MLEVEL); } catch {} }
+  setMotion((() => { try { return localStorage.getItem('grab-motion') || 'max'; } catch { return 'max'; } })());
   function jelly(el, k = 1) {
     if (!el || REDUCE || !el.animate) return;
-    const a = 0.12 * k;
+    const a = Math.min(0.42, 0.12 * k * MK);
     el.animate([
       { scale: '1 1' }, { scale: `${1 + a} ${1 - a}` }, { scale: `${1 - a * 0.75} ${1 + a * 0.75}` },
       { scale: `${1 + a * 0.4} ${1 - a * 0.4}` }, { scale: `${1 - a * 0.18} ${1 + a * 0.18}` }, { scale: '1 1' },
@@ -185,6 +190,48 @@
     if ((e.metaKey || e.ctrlKey) && ['1', '2', '3', '4', '5', '6'].includes(e.key)) { e.preventDefault(); const b = $$('.nav-btn')[+e.key - 1]; if (b) { b.click(); jelly(b, 0.8); } }
   });
 
+  // ---------- MAX motion: elastic drag, letter bounce, hover squish ----------
+  // Grab any card or pack and pull it: it stretches like rubber and snaps back with a wobble.
+  (() => {
+    let el = null, sx = 0, sy = 0, dragging = false, id = 0;
+    document.addEventListener('pointerdown', (e) => {
+      if (REDUCE || e.button !== 0) return;
+      const c = e.target.closest('.card, .pack, .rowi, .dl'); if (!c || e.target.closest('button')) return;
+      el = c; sx = e.clientX; sy = e.clientY; dragging = false; id = e.pointerId;
+    });
+    document.addEventListener('pointermove', (e) => {
+      if (!el || e.pointerId !== id) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy, dist = Math.hypot(dx, dy);
+      if (!dragging && dist < 7) return;
+      if (!dragging) { dragging = true; el.classList.add('pull'); }
+      const f = 0.42 / (1 + dist / 520), st = Math.min(0.16, dist / 1400) * Math.min(1.4, MK), ang = Math.atan2(dy, dx);
+      el.style.translate = `${(dx * f).toFixed(1)}px ${(dy * f).toFixed(1)}px`;
+      el.style.scale = `${(1 + st * Math.abs(Math.cos(ang))).toFixed(3)} ${(1 + st * Math.abs(Math.sin(ang))).toFixed(3)}`;
+      el.style.rotate = `${(dx * 0.012).toFixed(2)}deg`;
+    });
+    const end = () => {
+      if (!el) return; const c = el; el = null;
+      if (!dragging) return;
+      const from = { translate: c.style.translate || '0px 0px', scale: c.style.scale || '1 1', rotate: c.style.rotate || '0deg' };
+      c.style.translate = c.style.scale = c.style.rotate = '';
+      c.animate([from, { translate: '0px 0px', scale: '1 1', rotate: '0deg' }], { duration: SP.jelly.ms, easing: SP.jelly.css }).onfinish = () => c.classList.remove('pull');
+      // a pull is not a click
+      const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      document.addEventListener('click', stop, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener('click', stop, { capture: true }), 60);
+    };
+    document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
+  })();
+  // headline letters hop when the cursor runs over them; everything clickable squishes a little on hover
+  document.addEventListener('pointerover', (e) => {
+    if (REDUCE) return;
+    const l = e.target.closest && e.target.closest('.l');
+    if (l && l.animate) { l.animate([{ translate: '0 0', scale: '1 1', rotate: '0deg' }, { translate: `0 ${-14 * MK}px`, scale: '.9 1.2', rotate: `${(Math.random() - 0.5) * 24}deg` }, { translate: '0 0', scale: '1.15 .85', rotate: '0deg' }, { translate: '0 0', scale: '1 1', rotate: '0deg' }], { duration: 620, easing: 'cubic-bezier(.3,.7,.4,1)' }); return; }
+    const b = e.target.closest && e.target.closest('.btn, .nav-btn, .chip, .sw, .seg-b, .pill, .fact, .set, .brand');
+    if (b && !b.contains(e.relatedTarget)) jelly(b, b.matches('.set, .fact') ? 0.18 : 0.55);
+  });
+  $('.brand').addEventListener('click', () => { jelly($('.logo'), 3); burst($('.logo'), 18); });
+
   // ---------- action button ----------
   function actionHTML(it, extraClass = '') {
     const id = esc(it.id);
@@ -225,6 +272,8 @@
   const fluid = (() => {
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const main = $('.main'), blob = $('#blob'), glow = $('#sglow');
+    const goo = $$('#goo i'), gp = goo.map(() => ({ x: 0, y: 0 }));
+    let wave = 0, waveV = 0, waveShown = 0;
     let target = 0, cur = 0, wheeling = false, vel = 0, lastTop = 0, idle = 0, over = 0, overV = 0, overShown = 0;
     const maxScroll = () => Math.max(0, view.scrollHeight - view.clientHeight);
     view.addEventListener('wheel', (e) => {
@@ -260,7 +309,14 @@
       if (Math.abs(over) < 0.05 && Math.abs(overV) < 0.05) over = overV = 0;
       if (over !== overShown) { overShown = over; const vi = view.firstElementChild; if (vi) { vi.style.transform = over ? `translateY(${over.toFixed(2)}px)` : ''; vi.style.transformOrigin = over > 0 ? '50% 0' : '50% 100%'; vi.style.scale = over ? `1 ${(1 + Math.abs(over) / 2400).toFixed(4)}` : ''; } }
       const sk = reduce ? 0 : Math.max(-2.2, Math.min(2.2, vel * -0.06));
-      view.style.setProperty('--sk', sk.toFixed(3) + 'deg');
+      view.style.setProperty('--sk', (sk * Math.min(1.5, MK)).toFixed(3) + 'deg');
+      // jelly wave: content lags behind the scroll column by column, overshoots, and settles
+      const wt = reduce ? 0 : Math.max(-30, Math.min(30, vel * -1.2)) * MK;
+      waveV += (wt - wave) * 0.11; waveV *= 0.8; wave += waveV;
+      if (Math.abs(wave) < 0.02 && Math.abs(waveV) < 0.02) wave = waveV = 0;
+      if (wave !== waveShown) { waveShown = wave; view.style.setProperty('--vy', wave.toFixed(2) + 'px'); view.style.setProperty('--st', (1 + Math.min(0.05, Math.abs(wave) / 900)).toFixed(4)); }
+      // gooey cursor trail
+      if (goo && mx > -999) for (let i = 0; i < gp.length; i++) { const g = gp[i], k = 0.22 - i * 0.045; g.x += (mx - g.x) * k; g.y += (my - g.y) * k; goo[i].style.transform = `translate(${g.x}px, ${g.y}px)`; }
       if (Math.abs(vel) > 0.5) { main.classList.add('scrolling'); idle = 0; } else if (++idle > 30) main.classList.remove('scrolling');
       const h = view.clientHeight, sh = view.scrollHeight;
       if (sh > h) { const th = Math.max(30, h * h / sh); glow.style.height = th + 'px'; glow.style.transform = `translateY(${view.offsetTop + (top / (sh - h)) * (h - th)}px)`; }
@@ -330,7 +386,18 @@
       <div style="min-width:0"><div class="name">${esc(it.name)}</div><div class="desc">${right.sub}</div></div>
       <div class="acts">${right.acts}</div></div>`;
   }
-  function setView(html) { view.innerHTML = `<div class="view-in">${html}</div>`; hydrateIcons(view); fluid.reveal(view); fluid.counters(view); }
+  function setView(html) {
+    view.innerHTML = `<div class="view-in">${html}</div>`; hydrateIcons(view); fluid.reveal(view); fluid.counters(view);
+    // each column of cards rides the scroll wave a little later than the one before it
+    for (const g of $$('.grid, .packs, .list', view)) {
+      const kids = [...g.children]; if (!kids.length) continue;
+      const top0 = kids[0].offsetTop; let cols = kids.findIndex(k => k.offsetTop !== top0); if (cols < 1) cols = g.classList.contains('list') ? 1 : kids.length;
+      kids.forEach((k, i) => { k.style.setProperty('--lag', g.classList.contains('list') ? (0.5 + (i % 3) * 0.25).toFixed(2) : (0.35 + (i % cols) * 0.3).toFixed(2)); k.style.setProperty('--i', i); });
+    }
+    if (navDir && !REDUCE) { const vi = view.firstElementChild; vi.style.animation = 'none'; vi.animate([{ transform: `translateX(${navDir * 90 * Math.min(1.3, MK)}px) skewX(${navDir * -7}deg) scaleX(1.06)`, opacity: 0, filter: 'blur(8px)' }, { transform: 'none', opacity: 1, filter: 'none' }], { duration: SP.bouncy.ms, easing: SP.bouncy.css }); navDir = 0; }
+  }
+  let navDir = 0;
+  const VIEWS = ['discover', 'updates', 'installed', 'downloads', 'saved', 'settings'];
 
   function wingetNote() {
     if (isMac() || S.info.winget !== false) return '';
@@ -354,7 +421,7 @@
       setView(`<div class="h2"><h2>Results <span class="sub">${S.results.length >= 60 ? 'top 60' : shown.length} for "${esc(q)}"</span></h2>${freeToggle()}</div><div class="grid">${shown.map(cardHTML).join('')}</div>`);
       return;
     }
-    const hero = `<div class="hero"><h1>${['Get', 'any', 'app.'].map((w, i) => `<span class="w" style="--i:${i}">${w}</span> `).join('')}<span class="g w" style="--i:3">One click.</span></h1><p>Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.</p>
+    const hero = `<div class="hero"><h1>${['Get', 'any', 'app.'].map((w, i) => `<span class="w" style="--i:${i}">${[...w].map(c => `<i class="l">${c}</i>`).join('')}</span> `).join('')}<span class="g w" style="--i:3">One click.</span></h1><p>Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.</p>
       <div class="chips"><span class="chip">${I.shield}${isMac() ? 'Checksums verified' : 'Hash-checked by winget'}</span><span class="chip">${I.bolt}No browser, no fake buttons</span><span class="chip">${I.box}${S.cat.ready ? `<b data-count="${S.cat.count}">0</b>&nbsp;apps` : 'Thousands of apps'}</span></div></div>`;
     if (S.cat.error) { setView(hero + `<div class="empty">${I.globe}<div class="big">Can't reach the catalog</div><div>${esc(S.cat.error)}</div><div style="margin-top:14px"><button class="btn btn-solid" data-retry-cat>Try again</button></div></div>`); return; }
     if (!S.cat.ready) { setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2></div><div class="grid">${'<div class="skel"></div>'.repeat(12)}</div>`); return; }
@@ -443,6 +510,7 @@
     const mod = isMac() ? '⌘' : 'Ctrl ';
     setView(`<div class="hero"><h1>Settings</h1></div>
       <div class="set"><div><b>Colour</b><span>Pick the vibe for the whole app</span></div><div class="swatches">${Object.entries(THEMES).map(([k, c]) => `<button class="sw${S.theme === k ? ' on' : ''}" data-theme="${k}" title="${k}" style="background:linear-gradient(135deg,${c.join(',')})"></button>`).join('')}</div></div>
+      <div class="set"><div><b>Motion</b><span>How bouncy everything is</span></div><div class="seg">${[['chill', 'Chill'], ['bouncy', 'Bouncy'], ['max', 'MAX']].map(([k, n]) => `<button class="seg-b${MLEVEL === k ? ' on' : ''}" data-motion="${k}">${n}</button>`).join('')}</div></div>
       <div class="set"><div><b>Free apps only</b><span>Hide apps Grab knows cost money</span></div>${freeToggle()}</div>
       <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates install themselves in the background</span></div><button class="btn" data-upd-check>Check for updates</button></div>
       <div class="set"><div><b>Shortcuts</b><span>${mod}K search · ${mod}1 to ${mod}6 switch tabs · Esc close</span></div></div>
@@ -458,7 +526,7 @@
     else if (S.view === 'settings') renderSettings();
     else renderDownloads();
   }
-  function go(v) { if (S.view === v && !S.pack) return; S.pack = null; S.view = v; fluid.jump(0); render(); }
+  function go(v) { if (S.view === v && !S.pack) return; S.pack = null; navDir = Math.sign(VIEWS.indexOf(v) - VIEWS.indexOf(S.view)) || 1; S.view = v; fluid.jump(0); render(); }
 
   function badges() {
     const nUp = S.scan ? S.scan.filter(s => s.update && !(S.jobsByItem.get(s.id) && S.jobsByItem.get(s.id).state === 'done')).length : 0;
@@ -509,7 +577,7 @@
   function closeSheet() {
     const sh = $('#sheet'), back = $('#sheet-back');
     if (sh.hidden) return;
-    sh.classList.remove('on'); back.classList.remove('on');
+    sh.classList.remove('on'); back.classList.remove('on'); if (!REDUCE && sh.animate) sh.animate([{ scale: '1 1' }, { scale: '.9 1.06' }, { scale: '1.05 .95' }], { duration: 320, easing: 'ease-in' });
     setTimeout(() => { sh.hidden = true; back.hidden = true; sh.innerHTML = ''; }, 420);
   }
 
@@ -554,6 +622,7 @@
       badges(); if (S.view === 'saved') render(); return;
     }
     if (t.dataset.savedAll != null) { const todo = (S.savedItems || []).filter(it => S.saved.has(it.id) && !isInstalled(S.items.get(it.id) || it) && !it.price); for (const it of todo) { try { await G.install(it.id); } catch {} } burst(t, 22); toast(`Grabbing ${todo.length} app${todo.length === 1 ? '' : 's'}`); t.disabled = true; return; }
+    if (t.dataset.motion) { setMotion(t.dataset.motion); render(); const b = $(`[data-motion="${t.dataset.motion}"]`); jelly(b, 2); burst(b, 14); return; }
     if (t.dataset.theme) { applyTheme(t.dataset.theme); render(); burst($(`[data-theme="${t.dataset.theme}"]`), 12); return; }
     if (t.dataset.updCheck != null) { t.disabled = true; t.textContent = 'Checking'; const u = await G.updCheck().catch(() => null); const line = $('#upd-line'); if (line) line.textContent = !u ? 'Could not check right now' : u.status === 'uptodate' ? 'You have the latest version' : ['available', 'downloading', 'unpacking', 'ready'].includes(u.status) ? `Grab ${String(u.latest || '').replace(/^v/, '')} is on its way` : u.error || 'Could not check right now'; t.disabled = false; t.textContent = 'Check for updates'; return; }
     if (t.dataset.free != null) { S.freeOnly = !S.freeOnly; try { localStorage.setItem('grab-free', S.freeOnly ? '1' : '0'); } catch {} render(); return; }
@@ -601,6 +670,7 @@
   const qEl = $('#q');
   let qTimer = null, qSeq = 0;
   qEl.addEventListener('input', () => {
+    jelly($('#search-wrap'), 0.22);
     S.q = qEl.value;
     $('#clear').hidden = !S.q;
     clearTimeout(qTimer);
