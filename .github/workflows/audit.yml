@@ -25,15 +25,6 @@ jobs:
           npx electron . > audit.log 2>&1 || true
           grep -E "audit|catalog|CRASH" audit.log | tail -20
           ls -la audit-*.json
-      - name: Full icon database scan
-        if: runner.os == 'Windows'
-        shell: bash
-        env: { GRAB_SELFTEST: iconscan, GRAB_DEBUG: "1" }
-        run: |
-          export GRAB_AUDIT_OUT="$PWD/scan-Windows.json"
-          npx electron . > scan.log 2>&1 || true
-          grep -E "iconscan|CRASH" scan.log | tail -20
-          ls -la scan-*.json
       - name: Publish result to a branch
         shell: bash
         run: |
