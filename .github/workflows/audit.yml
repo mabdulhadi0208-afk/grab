@@ -3,6 +3,8 @@ on:
   push:
     branches: [audit]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   audit:
     strategy:
@@ -23,7 +25,11 @@ jobs:
           npx electron . > audit.log 2>&1 || true
           grep -E "audit|catalog|CRASH" audit.log | tail -20
           ls -la audit-*.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: audit-${{ runner.os }}
-          path: audit-*.json
+      - name: Publish result to a branch
+        shell: bash
+        run: |
+          F=audit-${{ runner.os }}.json
+          mkdir out && cp $F out/ && cd out
+          git init -q -b audit-results-${{ runner.os }}
+          git add -A && git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -q -m "audit result"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" audit-results-${{ runner.os }}

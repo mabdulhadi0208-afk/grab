@@ -610,13 +610,17 @@ OpenAI.ChatGPT Anthropic.Claude Anysphere.Cursor Codeium.Windsurf ElementLabs.LM
 7zip.7zip RARLab.WinRAR VideoLAN.VLC OBSProject.OBSStudio Audacity.Audacity BlenderFoundation.Blender Figma.Figma Spotify.Spotify Discord.Discord Telegram.TelegramDesktop SlackTechnologies.Slack
 ShareX.ShareX Greenshot.Greenshot Microsoft.PowerToys Git.Git Python.Python.3.13 OpenJS.NodeJS.LTS Apple.iTunes Apple.iCloud AnyDeskSoftwareGmbH.AnyDesk TeamViewer.TeamViewer RustDesk.RustDesk Parsec.Parsec`.split(/\s+/);
 
+function thumb(buf) {
+  try { const { nativeImage } = require('electron'); const img = nativeImage.createFromBuffer(buf); if (!img.isEmpty()) return img.resize({ width: 96, height: 96, quality: 'best' }).toPNG().toString('base64'); } catch {}
+  return buf.length < 80000 ? buf.toString('base64') : null;
+}
 async function fetchImg(url) {
   try {
     const r = await net.fetch(url);
     if (!r.ok) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length < 200 || buf.length > 3000000) return null;
-    return buf.toString('base64');
+    return thumb(buf);
   } catch { return null; }
 }
 async function runAudit() {
@@ -642,7 +646,7 @@ async function runAudit() {
     }
     for (const [src, u] of chain) {
       let b64 = null;
-      if (src === 'site') { const d = await favicon(u); b64 = d ? d.split(',')[1] : null; } else b64 = await fetchImg(u);
+      if (src === 'site') { const d = await favicon(u); b64 = d ? thumb(Buffer.from(d.split(',')[1], 'base64')) : null; } else b64 = await fetchImg(u);
       if (b64) { row.src = src; row.url = u; row.b64 = b64; break; }
     }
     return row;
