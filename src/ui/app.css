@@ -297,3 +297,8 @@ kbd { font-family: inherit; font-weight: 600; font-size: 11px; line-height: 1; c
 .sw:hover { scale: 1.15; } .sw.on { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px #fff; }
 .btn.saved-on { color: #f9a8d4; background: rgba(244,114,182,.14); }
 #badge-saved { background: rgba(255,255,255,.12); }
+
+.btn-buy { color: #1a1300; background: linear-gradient(135deg, #fde68a, #fbbf24); box-shadow: 0 8px 22px -12px rgba(251,191,36,.9); }
+.btn-buy:hover { background: linear-gradient(135deg, #fef3c7, #fcd34d); }
+.btn-buy svg { color: #1a1300; }
+.btn-trial { min-width: 0; padding: 0 12px; }

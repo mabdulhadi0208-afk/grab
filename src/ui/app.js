@@ -199,7 +199,10 @@
     if (j && j.state === 'error') return `<button class="btn btn-bad${cls}" data-act="${id}" data-do="${j.verb === 'update' ? 'update' : 'get'}" title="${esc(j.msg)}">Retry</button>`;
     if (updateFor(it.id) && !(j && j.state === 'done' && j.verb !== 'uninstall')) return `<button class="btn btn-solid${cls}" data-act="${id}" data-do="update">Update</button>`;
     if (isInstalled(it)) return isMac() ? `<button class="btn btn-ok${cls}" data-act="${id}" data-do="open">Open</button>` : `<button class="btn btn-ok${cls}" data-act="${id}" data-do="detail">${I.check}Installed</button>`;
-    return `<button class="btn btn-get${cls}" data-act="${id}" data-do="get"${it.price === 'paid' ? ' title="Downloads the official trial"' : ''}>${it.price === 'paid' ? 'Trial' : 'Get'}</button>`;
+    // paid apps: the developer's stated trial if there is one, otherwise Buy (opens the developer's website)
+    if (it.price && it.trial) return `<button class="btn btn-get btn-trial${cls}" data-act="${id}" data-do="get" title="${esc(it.trial.note)}">${esc(it.trial.label)}</button>`;
+    if (it.price) return `<button class="btn btn-buy${cls}" data-act="${id}" data-do="buy" title="Opens the developer's website">${I.tag}Buy</button>`;
+    return `<button class="btn btn-get${cls}" data-act="${id}" data-do="get">Get</button>`;
   }
   function refreshActions(itemId) {
     for (const b of $$(`[data-act="${sel(itemId)}"]`)) {
@@ -486,13 +489,14 @@
     sh.innerHTML = `<button class="btn btn-ghost close" data-close>${I.x}</button>
       <div class="head">${iconHTML(it)}<div style="min-width:0"><h3>${esc(it.name)}</h3><div class="pub">${esc(isMac() ? (it.host || '') : (it.publisher || ''))}</div></div></div>
       ${isMac() && it.desc ? `<p class="about">${esc(it.desc)}</p>` : ''}
-      <div class="actions">${actionHTML(it, 'big')}${saveBtn(it.id)}${it.home ? `<button class="btn big" data-ext="${esc(it.home)}">${I.globe} Website</button>` : ''}${inst ? `<button class="btn btn-ghost big" data-remove="${esc(it.id)}">${I.trash} ${isMac() ? 'Move to Trash' : 'Uninstall'}</button>` : ''}</div>
-      ${it.price ? `<div class="paynote">${I.tag}<div><b>${it.price === 'sub' ? 'This app needs a paid subscription.' : 'This app costs money.'}</b> Grab downloads the official version straight from the developer${it.price === 'sub' ? '' : ', which usually starts as a free trial'}. To keep using it, buy it from them.${it.home ? ` <span class="link" data-ext="${esc(it.home)}">Buy from the developer</span>` : ''}</div></div>` : ''}
+      <div class="actions">${actionHTML(it, 'big')}${it.price && it.trial ? `<button class="btn btn-buy big" data-act="${esc(it.id)}" data-do="buy">${I.tag}Buy</button>` : ''}${it.price && !it.trial && !isInstalled(it) && !S.jobsByItem.get(it.id) ? `<button class="btn big" data-act2="${esc(it.id)}">${I.dl} Download</button>` : ''}${saveBtn(it.id)}${it.home ? `<button class="btn big" data-ext="${esc(it.home)}">${I.globe} Website</button>` : ''}${inst ? `<button class="btn btn-ghost big" data-remove="${esc(it.id)}">${I.trash} ${isMac() ? 'Move to Trash' : 'Uninstall'}</button>` : ''}</div>
+      ${it.price ? `<div class="paynote">${I.tag}<div><b>${it.price === 'sub' ? 'This app needs a paid subscription.' : 'This app costs money.'}</b> ${it.trial ? esc(it.trial.note) + ' After that, buy it from the developer.' : 'Buy it on the developer\'s website, then use Download to install the official version here.'}</div></div>` : ''}
       <div class="facts">
         <div class="fact"><span>Latest version</span><span>${esc(String(it.ver || '').split(',')[0] || 'n/a')}</span></div>
         ${sc && sc.installedVer ? `<div class="fact"><span>Installed</span><span>${esc(sc.installedVer)}</span></div>` : ''}
         ${isMac() ? `<div class="fact"><span>Downloads from</span><span>${esc(it.host)}</span></div>` : ''}
-        <div class="fact"><span>Price</span><span>${it.price === 'paid' ? 'Paid (trial download)' : it.price === 'sub' ? 'Subscription' : 'No price listed'}</span></div>
+        <div class="fact"><span>Price</span><span>${it.price === 'paid' ? 'Paid' : it.price === 'sub' ? 'Subscription' : 'No price listed'}</span></div>
+        ${it.price ? `<div class="fact"><span>Free trial</span><span>${it.trial ? esc(it.trial.label) : 'None confirmed'}</span></div>` : ''}
         <div class="fact"><span>ID</span><span>${esc(it.id)}</span></div>
         ${it.deprecated ? `<div class="fact"><span>Status</span><span style="color:var(--warn)">No longer maintained</span></div>` : ''}
       </div>
@@ -527,6 +531,12 @@
       else if (what === 'cancel') await G.cancel(Number(jobId));
       else if (what === 'quit') await G.resume(Number(jobId));
       else if (what === 'detail') openSheet(id);
+      else if (what === 'buy') {
+        const it = S.items.get(id) || {};
+        let home = it.home || it.mhome;
+        if (!home && !isMac()) { const m = await G.meta(id).catch(() => null); home = m && m.home; }
+        if (home) { G.external(home); toast(`Opening ${it.name || 'the developer'}'s website`); } else openSheet(id);
+      }
     } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true); }
   }
 
@@ -536,6 +546,7 @@
     if (t.matches('.nav-btn')) { go(t.dataset.view); return; }
     if (t.dataset.act) { e.stopPropagation(); doAct(t.dataset.act, t.dataset.do, t.dataset.job); return; }
     if (t.dataset.ext) { G.external(t.dataset.ext); return; }
+    if (t.dataset.act2) { e.stopPropagation(); try { await G.install(t.dataset.act2); t.remove(); toast('Downloading the official version'); } catch (err) { toast(String(err.message || err), true); } return; }
     if (t.dataset.save) {
       const id = t.dataset.save; if (S.saved.has(id)) S.saved.delete(id); else { S.saved.add(id); burst(t, 10); }
       store.set('grab-saved', [...S.saved]); S.savedItems = null;

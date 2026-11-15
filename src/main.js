@@ -6,7 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const U = require('./util');
 const { prepare, search } = require('./search');
-const { priceOf, PACKS } = require('./extras');
+const { priceOf, trialOf, PACKS } = require('./extras');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -153,7 +153,7 @@ function pub(it) {
     publisher: it.publisher || '', verified: IS_MAC ? !!(it.sha && it.sha !== 'no_check') : true,
     installed, path: installedPath, deprecated: !!it.deprecated, label: it.label || '',
     icons: macIcons(it), fav: IS_MAC ? favHost(it, it.home) : '',
-    price: priceOf(it.id, IS_MAC),
+    price: priceOf(it.id, IS_MAC), trial: trialOf(it.id, IS_MAC),
   };
 }
 
@@ -499,6 +499,7 @@ async function runSelfTest() {
       for (const id of ['bartender', 'sublime-text', 'minecraft']) { const it = catalog.byId.get(id); if (it) check(pub(it).price === 'paid', `${id} is labelled Paid`); }
       for (const id of ['1password', 'microsoft-office']) { const it = catalog.byId.get(id); if (it) check(pub(it).price === 'sub', `${id} is labelled Subscription`); }
       for (const id of ['google-chrome', 'vlc', 'discord', 'visual-studio-code']) check(pub(itemOrThrow(id)).price === '', `${id} has no price label`);
+      check(pub(itemOrThrow('bartender')).trial.label === '4-week trial' && !pub(itemOrThrow('cleanshot')).trial, 'trial length shown only where the developer states one');
       const known = catalog.items.filter(i => priceOf(i.id, true)).length;
       U.log(`pricing: ${known} catalog apps carry a Paid/Subscription label`);
       check(known >= 60, 'pricing list matches real catalog apps');

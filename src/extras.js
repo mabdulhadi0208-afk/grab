@@ -29,6 +29,21 @@ for (const t of MAC_SUB) map.set('m:' + t, 'sub');
 for (const t of WIN_PAID) map.set('w:' + t.toLowerCase(), 'paid');
 for (const t of WIN_SUB) map.set('w:' + t.toLowerCase(), 'sub');
 
+// Trial lengths, only where the developer's own pages state them (checked Nov 2026). No entry = no trial claim, the button says Buy.
+const TRIALS = {
+  'm:bartender': '4-week trial', 'm:cleanmymac': '7-day trial', 'm:sublime-text': 'Free to try', 'm:parallels': '14-day trial',
+  'm:1password': '14-day trial', 'm:microsoft-office': '1-month trial', 'm:sketch': '30-day trial', 'm:istat-menus': '14-day trial',
+  'm:bettertouchtool': '45-day trial', 'm:adobe-creative-cloud': '7-day trial', 'm:minecraft': '100-min demo', 'm:typora': '15-day trial',
+  'w:rarlab.winrar': '40-day trial', 'w:sublimehq.sublimetext.4': 'Free to try', 'w:agilebits.1password': '14-day trial',
+  'w:microsoft.office': '1-month trial', 'w:adobe.creativecloud': '7-day trial', 'w:mojang.minecraftlauncher': '100-min demo', 'w:typora.typora': '15-day trial',
+};
+const TRIAL_NOTE = { 'Free to try': 'The developer lets you evaluate it with no enforced time limit; a licence is required for continued use.', '100-min demo': 'The free demo lasts about 100 minutes of play.' };
+function trialOf(id, isMac) {
+  id = String(id || '');
+  const t = TRIALS[isMac ? 'm:' + id : 'w:' + id.toLowerCase()] || '';
+  return t ? { label: t, note: TRIAL_NOTE[t] || `The developer offers a ${t.replace(' trial', '')} free trial.` } : null;
+}
+
 // '' | 'paid' | 'sub'
 function priceOf(id, isMac) {
   id = String(id || '');
@@ -52,4 +67,4 @@ const PACKS = {
   ],
 };
 
-module.exports = { priceOf, PACKS };
+module.exports = { priceOf, trialOf, PACKS };
