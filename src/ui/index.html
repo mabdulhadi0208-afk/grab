@@ -8,52 +8,65 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="nova-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--accent)"/><stop offset=".55" style="stop-color:var(--accent2)"/><stop offset="1" style="stop-color:var(--accent3)"/></linearGradient>
+      <symbol id="grab-mark" viewBox="0 0 64 64"><path d="M32 13v25" /><path d="M21.5 28.5L32 39l10.5-10.5"/><path d="M15 43.5v3.2A4.3 4.3 0 0 0 19.3 51h25.4a4.3 4.3 0 0 0 4.3-4.3v-3.2"/></symbol>
+    </defs>
+  </svg>
   <div class="app">
-    <aside class="side">
+    <aside class="rail">
       <div class="drag"></div>
-      <div class="brand">
-        <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
-          <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--a1)"/><stop offset=".55" style="stop-color:var(--a2)"/><stop offset="1" style="stop-color:var(--a3)"/></linearGradient></defs>
-          <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#lg)"/>
-          <g fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><path d="M32 15v24"/><path d="M22 30l10 10 10-10"/><path d="M17 45v2a3 3 0 0 0 3 3h24a3 3 0 0 0 3-3v-2"/></g>
-        </svg>
-        <span>Grab</span>
+      <div class="brand" title="Grab">
+        <span class="logo"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#grab-mark"/></svg></span>
+        <span class="word">Grab</span>
       </div>
-      <nav class="nav"><i class="nav-ind" id="nav-ind"></i>
-        <button class="nav-btn active" data-view="discover"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg><span>Discover</span></button>
-        <button class="nav-btn" data-view="updates"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg><span>Updates</span><b class="badge" id="badge-updates"></b></button>
-        <button class="nav-btn" data-view="installed"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></svg><span>Installed</span></button>
-        <button class="nav-btn" data-view="downloads"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg><span>Downloads</span><b class="badge live" id="badge-downloads"></b></button>
-        <button class="nav-btn" data-view="saved"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.600-7 10-7 10z"/></svg><span>Saved</span><b class="badge" id="badge-saved"></b></button>
-        <button class="nav-btn" data-view="settings"><svg viewBox="0 0 24 24"><path d="M5 7h9M18 7h1M5 12h2M11 12h8M5 17h7M16 17h3"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/></svg><span>Settings</span></button>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="discover" style="--ic:#5b8cff"><i class="ni"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></i><span>Discover</span></button>
+        <button class="nav-btn" data-view="updates" style="--ic:#12b886"><i class="ni"><svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.8h-4.8"/></svg></i><span>Updates</span><b class="badge" id="badge-updates"></b></button>
+        <button class="nav-btn" data-view="installed" style="--ic:#8b5cf6"><i class="ni"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/></svg></i><span>Installed</span></button>
+        <button class="nav-btn" data-view="downloads" style="--ic:#06b6d4"><i class="ni"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg></i><span>Downloads</span><b class="badge live" id="badge-downloads"></b></button>
+        <button class="nav-btn" data-view="saved" style="--ic:#ec4899"><i class="ni"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></i><span>Saved</span><b class="badge" id="badge-saved"></b></button>
+        <button class="nav-btn" data-view="settings" style="--ic:#f59e0b"><i class="ni"><svg viewBox="0 0 24 24"><path d="M5 7h9M18 7h1M5 12h2M11 12h8M5 17h7M16 17h3"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/></svg></i><span>Settings</span></button>
       </nav>
-      <div class="side-fill"></div>
-      <div class="self-card" id="self-card" hidden>
-        <div class="self-title" id="self-title">Update</div>
-        <div class="self-bar"><i id="self-fill"></i></div>
-        <button class="btn btn-solid small" id="self-btn">Update Grab</button>
+      <div class="rail-fill"></div>
+      <div class="upd" id="self-card" hidden>
+        <div class="upd-top">
+          <span class="upd-ic"><svg class="upd-ring" viewBox="0 0 60 60"><rect class="bgc" x="3" y="3" width="54" height="54" rx="18"/><rect class="fg" id="self-arc" x="3" y="3" width="54" height="54" rx="18" pathLength="100"/></svg><span class="tile"><svg viewBox="0 0 64 64"><use href="#grab-mark"/></svg></span></span>
+          <div class="upd-t"><div class="upd-eye" id="self-eye">Grab update</div><div class="upd-title" id="self-title">Update</div></div>
+        </div>
+        <div class="upd-sub" id="self-sub"></div>
+        <div class="upd-bar"><i id="self-fill"></i></div>
+        <div class="upd-acts"><button class="btn btn-solid small" id="self-btn">Update Grab</button><button class="lnk" id="self-alt" hidden></button></div>
       </div>
-      <div class="side-foot" id="side-foot">Loading catalog</div>
+      <div class="rail-foot" id="side-foot">Loading catalog</div>
     </aside>
 
     <main class="main">
       <header class="top">
         <label class="search" id="search-wrap">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+          <svg class="s-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
           <input id="q" type="text" placeholder="Search any app, or paste a download link" autocomplete="off" spellcheck="false">
-          <kbd id="kbd"></kbd>
           <button class="clear" id="clear" title="Clear" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
+          <kbd id="kbd"></kbd>
         </label>
       </header>
       <section class="view" id="view"></section>
-      <svg width="0" height="0" style="position:absolute"><filter id="goof"><feGaussianBlur in="SourceGraphic" stdDeviation="10"/><feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 24 -10"/></filter></svg><div id="goo"><i></i><i></i><i></i><i></i></div><i class="blob" id="blob"></i><i class="scrollbar-glow" id="sglow"></i>
     </main>
   </div>
 
   <div class="sheet-back" id="sheet-back" hidden></div>
   <aside class="sheet" id="sheet" hidden></aside>
+  <div class="dlg-back" id="dlg" hidden></div>
   <div class="toasts" id="toasts"></div>
+  <div class="restart" id="restart" hidden>
+    <div class="rs-bg"><i></i><i></i><i></i></div>
+    <div class="rs-orb"><svg viewBox="0 0 64 64"><use href="#grab-mark"/></svg></div>
+    <div class="rs-tx"><div class="rs-eye">Updating</div><b>Restarting Grab</b><small id="rs-sub">Back in a few seconds, right where you left off</small><div class="rs-rail"><i></i><i></i><i></i></div></div>
+    <div class="rs-num" id="rs-num"></div>
+  </div>
 
+  <script src="jelly.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

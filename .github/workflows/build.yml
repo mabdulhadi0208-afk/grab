@@ -70,6 +70,17 @@ jobs:
           for f in dist/Grab-mac-arm64.dmg dist/Grab-mac-arm64.zip; do s=$(stat -f%z "$f"); [ "$s" -gt 50000000 ] && echo "✓ $f $s bytes" || { echo "✗ $f too small"; exit 1; }; done
       - id: v
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - name: Release notes (the bullet list in the release commit's message)
+        run: |
+          {
+            echo "Grab ${{ steps.v.outputs.version }}: download any app without the browser."
+            echo
+            git log -1 --format=%B | grep -E '^[[:space:]]*[-*] ' || true
+            echo
+            echo "Mac: download **Grab-mac-arm64.dmg**, drag Grab to Applications, then right-click it → Open the first time."
+            echo "Windows: run **Grab-win-x64.exe** (if SmartScreen shows up: More info → Run anyway)."
+          } > release-notes.md
+          cat release-notes.md
       - uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
@@ -78,10 +89,7 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.zip
-          body: |
-            Grab ${{ steps.v.outputs.version }}: download any app without the browser.
-            Mac: download **Grab-mac-arm64.dmg**, drag Grab to Applications, then right-click it → Open the first time.
-            Windows: run **Grab-win-x64.exe** (if SmartScreen shows up: More info → Run anyway).
+          body_path: release-notes.md
 
   win:
     runs-on: windows-latest

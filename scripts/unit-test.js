@@ -113,6 +113,31 @@ async function t(name, fn) { try { await fn(); pass++; console.log('ok  ', name)
     assert.strictEqual(U.fileNameFor(r.finalUrl, r.disposition), 'My App.dmg');
   });
 
+  await t('download: a disk error fails the download instead of crashing or hanging', async () => {
+    const body = crypto.randomBytes(200 * 1024);
+    const srv = http.createServer((req, res) => { res.writeHead(200, { 'Content-Length': body.length }); res.end(body); });
+    await new Promise(r => srv.listen(0, r));
+    const dest = path.join(os.tmpdir(), 'grab-no-such-dir-' + process.pid, 'sub', 'file.bin');
+    const uncaught = []; const h = (e) => uncaught.push(e); process.on('uncaughtException', h);
+    const err = await Promise.race([
+      U.download(`http://127.0.0.1:${srv.address().port}/f`, dest, {}).then(() => null, e => e),
+      new Promise(r => setTimeout(() => r('HUNG'), 5000)),
+    ]);
+    process.off('uncaughtException', h); srv.close();
+    assert(err && err !== 'HUNG' && /Could not save the download/.test(err.message), 'rejects with a clear message: ' + (err && err.message || err));
+    assert.strictEqual(uncaught.length, 0, 'no uncaught exception');
+  });
+
+  await t('download: canceling rejects with Canceled', async () => {
+    const srv = http.createServer((req, res) => { res.writeHead(200, { 'Content-Length': 10 * 1024 * 1024 }); res.write(Buffer.alloc(64 * 1024)); }); // never finishes
+    await new Promise(r => srv.listen(0, r));
+    const ac = new AbortController();
+    const p = U.download(`http://127.0.0.1:${srv.address().port}/f`, path.join(os.tmpdir(), 'grab-cancel-test'), { signal: ac.signal, onProgress: () => ac.abort() });
+    const e = await p.then(() => null, x => x);
+    srv.closeAllConnections && srv.closeAllConnections(); srv.close();
+    assert(e && /Canceled|abort/i.test(e.message), 'canceled: ' + (e && e.message));
+  });
+
   await t('mac: sniff file types', async () => {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'grab-sniff-'));
     const w = (n, b) => { const p = path.join(d, n); fs.writeFileSync(p, b); return p; };
@@ -170,7 +195,7 @@ async function t(name, fn) { try { await fn(); pass++; console.log('ok  ', name)
   });
 
   await t('ui files parse', () => {
-    new Function(fs.readFileSync(path.join(__dirname, '../src/ui/app.js'), 'utf8'));
+    for (const f of ['app.js', 'jelly.js']) new Function(fs.readFileSync(path.join(__dirname, '../src/ui', f), 'utf8'));
     for (const f of ['main.js', 'preload.js', 'mac.js', 'win.js']) require('vm').createScript ? new (require('vm').Script)(require('module').wrap(fs.readFileSync(path.join(__dirname, '../src', f), 'utf8'))) : 0;
   });
 

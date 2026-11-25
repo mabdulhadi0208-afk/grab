@@ -35,15 +35,27 @@ let wingetOk = null;
 let rendererReady = false;
 
 // ---------------- window ----------------
+// Light, dark or follow the system (Settings, Appearance). Saved here too, so the window opens in the right colours.
+const appearanceFile = () => path.join(app.getPath('userData'), 'appearance.json');
+function loadAppearance() { try { const m = JSON.parse(fs.readFileSync(appearanceFile(), 'utf8')).mode; if (['system', 'light', 'dark'].includes(m)) nativeTheme.themeSource = m; } catch {} }
+const winColors = () => (nativeTheme.shouldUseDarkColors ? { bg: '#0a0c15', fg: '#f0f1f8' } : { bg: '#f5f6fb', fg: '#141722' });
+function paintWindow() {
+  if (!win || win.isDestroyed()) return;
+  const c = winColors();
+  try { win.setBackgroundColor(c.bg); } catch {}
+  if (IS_WIN) { try { win.setTitleBarOverlay({ color: c.bg, symbolColor: c.fg, height: 46 }); } catch {} }
+}
+
 function createWindow() {
+  const c = winColors();
   const common = {
-    width: 1120, height: 740, minWidth: 820, minHeight: 560, show: false,
+    width: 1240, height: 800, minWidth: 900, minHeight: 600, show: false,
     title: 'Grab',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false },
   };
   const plat = IS_MAC
-    ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 18 }, vibrancy: 'sidebar', visualEffectState: 'active', backgroundColor: '#00000000' }
-    : { titleBarStyle: 'hidden', titleBarOverlay: { color: '#0e1020', symbolColor: '#e6e8f5', height: 46 }, backgroundColor: '#0e1020', icon: path.join(__dirname, 'icon.png') };
+    ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 20, y: 18 }, backgroundColor: c.bg }
+    : { titleBarStyle: 'hidden', titleBarOverlay: { color: c.bg, symbolColor: c.fg, height: 46 }, backgroundColor: c.bg, icon: path.join(__dirname, 'icon.png') };
   win = new BrowserWindow({ ...common, ...plat });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
   win.once('ready-to-show', () => { if (!SELFTEST) win.show(); });
@@ -221,11 +233,18 @@ async function loadCatalog(force = false) {
     rescan();
     // refresh in background if the cached copy is old-ish
     if (r.source !== 'network' && Date.now() - r.ts > 6 * 3600e3) setTimeout(() => loadCatalog(true), 20000);
+    catalogRetryMs = 0;
   } catch (e) {
     U.log('catalog error', e);
-    if (!catalog.ready) { catalog.error = e.message; send('catalog', catalogInfo()); }
+    if (!catalog.ready) {
+      catalog.error = e.message; send('catalog', catalogInfo());
+      // offline at launch: keep trying quietly (30s, 1m, 2m... up to every 5 minutes) instead of waiting for a click
+      catalogRetryMs = Math.min(300000, (catalogRetryMs || 15000) * 2);
+      clearTimeout(catalogRetryT); catalogRetryT = setTimeout(() => { if (!catalog.ready) loadCatalog(true); }, catalogRetryMs);
+    }
   }
 }
+let catalogRetryMs = 0, catalogRetryT = null;
 function catalogInfo() {
   const popular = backend.POPULAR.map(id => catalog.byId.get(id)).filter(Boolean).map(pub);
   return { ready: catalog.ready, error: catalog.error, count: catalog.items.length, ts: catalog.ts, popular };
@@ -317,7 +336,7 @@ async function runJob(j) {
         j.fetched = await backend.fetchItem(item, { onProgress: progressFn(j), signal: j.ac.signal });
         j.verifiedHash = j.fetched.verified;
       }
-      if (j.state === 'canceled') return cleanup(j);
+      if (j.state === 'canceled') { cleanup(j); j.msg = 'Canceled'; emit(j, true); return; } // canceled just as the download finished: tell the UI
       j.state = 'installing'; j.stage = j.fetched.verified ? 'Verified' : 'Installing'; j.pct = 100; emit(j, true);
       let res;
       try {
@@ -449,7 +468,12 @@ ipcMain.handle('url', (_e, url) => {
   const it = IS_MAC ? backend.itemFromUrl(u.href) : { id: 'url:' + u.href, name: U.fileNameFor(u.href, ''), url: u.href };
   return addJob(it, 'install');
 });
-ipcMain.handle('cancel', (_e, jid) => { const j = jobs.get(jid); if (!j) return; if (['queued', 'needs-quit'].includes(j.state)) { j.state = 'canceled'; j.msg = 'Canceled'; cleanup(j); emit(j, true); } else { j.state = 'canceled'; try { j.ac && j.ac.abort(); } catch {} } });
+ipcMain.handle('cancel', (_e, jid) => {
+  const j = jobs.get(jid); if (!j) return;
+  if (['queued', 'needs-quit'].includes(j.state)) { j.state = 'canceled'; j.msg = 'Canceled'; cleanup(j); emit(j, true); }
+  else if (j.state === 'downloading') { j.state = 'canceled'; try { j.ac && j.ac.abort(); } catch {} }
+  // 'installing': files are already being copied (or winget is running the installer); stopping halfway would leave a broken app, so it finishes
+});
 ipcMain.handle('resume', (_e, jid) => { const j = jobs.get(jid); if (!j || j.state !== 'needs-quit') return; j.forceQuit = true; j.state = 'queued'; queue.push(j); emit(j, true); pump(); });
 ipcMain.handle('dismiss', (_e, jid) => { const j = jobs.get(jid); if (j && ['done', 'error', 'canceled'].includes(j.state)) jobs.delete(jid); });
 ipcMain.handle('jobs', () => [...jobs.values()].map(jobOut));
@@ -478,13 +502,21 @@ ipcMain.handle('meta', async (_e, id) => {
 });
 ipcMain.handle('fav', (_e, host) => favicon(host));
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
+ipcMain.handle('appearance', (_e, mode) => {
+  if (!['system', 'light', 'dark'].includes(mode)) return;
+  nativeTheme.themeSource = mode;
+  try { fs.writeFileSync(appearanceFile(), JSON.stringify({ mode })); } catch {}
+  paintWindow();
+});
 
 // ---------------- lifecycle ----------------
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
+app.on('second-instance', () => { if (!win) { if (app.isReady()) createWindow(); return; } if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
 app.on('window-all-closed', () => { if (!IS_MAC || SELFTEST) app.quit(); });
 app.on('activate', () => { if (!win) createWindow(); else win.show(); });
 
 app.whenReady().then(async () => {
+  loadAppearance();
+  nativeTheme.on('updated', paintWindow);
   createWindow();
   loadCatalog();
   updater.start(send, { autoCheck: !SELFTEST });

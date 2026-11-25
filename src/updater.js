@@ -112,11 +112,20 @@ async function download() {
     state.staged = staged;
     set({ status: 'ready' });
     log('staged', state.latest);
-  } catch (e) { abortCtl = null; set({ status: 'error', error: e.message }); log('download failed:', e.message); }
+  } catch (e) {
+    abortCtl = null;
+    if (state.status === 'available' && /Canceled/i.test(String(e && e.message))) { log('download canceled'); return; } // the user hit Cancel: not an error
+    set({ status: 'error', error: e.message }); log('download failed:', e.message);
+  }
 }
 
 function install() {
-  if (!state.staged) { if (state.status === 'available' || state.status === 'error') download(); return pub(); }
+  if (!state.staged) {
+    // 'error' after a failed check has no download link yet: check again instead of doing nothing
+    if (state.status === 'available' || (state.status === 'error' && state.url)) download();
+    else if (state.status === 'error') check(true);
+    return pub();
+  }
   const logf = path.join(app.getPath('logs'), 'update.log');
   try { fs.writeFileSync(flagFile(), ver(state.latest)); } catch {}
   if (IS_WIN) {
@@ -171,7 +180,12 @@ async function poll() {
   else if (state.status === 'idle') set({ status: 'uptodate', latest: tag });
 }
 
-function cancel() { try { abortCtl && abortCtl.abort(); } catch {} set({ status: 'available', progress: 0 }); }
+function cancel() {
+  if (state.status !== 'downloading') return pub(); // nothing to cancel: keep the real state (a ready update stays ready)
+  try { abortCtl && abortCtl.abort(); } catch {}
+  set({ status: 'available', progress: 0, bytes: 0, speed: 0 });
+  return pub();
+}
 
 // Stage a local zip as if it were a downloaded update (CI release gate).
 async function selfTestSwap(zip) {

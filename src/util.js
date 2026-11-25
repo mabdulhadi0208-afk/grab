@@ -49,17 +49,24 @@ async function download(url, dest, { headers = {}, onProgress, signal, fetchImpl
   const finalUrl = res.url || url;
   const disp = res.headers.get('content-disposition') || '';
   const hash = crypto.createHash('sha256');
+  if (!res.body) throw new Error('Download failed (empty response)');
   const out = fs.createWriteStream(dest);
+  // a disk error (full disk, no permission) must fail the download, not crash Grab or leave it waiting for 'drain' forever
+  let diskErr = null;
+  out.on('error', (e) => { diskErr = e; });
+  const writeErr = () => new Error('Could not save the download (' + (diskErr.code || diskErr.message) + ')');
   let received = 0, lastEmit = 0, lastBytes = 0, lastT = Date.now(), speed = 0;
   const reader = res.body.getReader();
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (diskErr) throw writeErr();
       const buf = Buffer.from(value);
       hash.update(buf);
       received += buf.length;
-      if (!out.write(buf)) await new Promise(r => out.once('drain', r));
+      if (!out.write(buf)) await new Promise(r => { const fin = () => { out.off('drain', fin); out.off('error', fin); r(); }; out.on('drain', fin); out.on('error', fin); });
+      if (diskErr) throw writeErr();
       const now = Date.now();
       if (now - lastEmit > 120) {
         const dt = (now - lastT) / 1000;
@@ -70,9 +77,10 @@ async function download(url, dest, { headers = {}, onProgress, signal, fetchImpl
     }
   } catch (e) {
     out.destroy();
+    try { reader.cancel().catch(() => {}); } catch {}
     throw signal && signal.aborted ? new Error('Canceled') : e;
   }
-  await new Promise((resolve, reject) => { out.end(resolve); out.on('error', reject); });
+  await new Promise((resolve, reject) => { if (diskErr) return reject(writeErr()); out.on('error', () => reject(writeErr())); out.end(resolve); });
   if (onProgress) onProgress({ received, total: total || received, speed });
   return { sha256: hash.digest('hex'), size: received, finalUrl, disposition: disp };
 }

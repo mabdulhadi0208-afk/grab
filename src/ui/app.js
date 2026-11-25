@@ -1,15 +1,23 @@
 'use strict';
-/* Grab renderer. Talks to the main process only through window.grab (preload). */
+/* Grab renderer. Talks to the main process only through window.grab (preload).
+   Grab 2.0: Lumen's design language (Lumen docs/NOVA.md) and Lumen's motion system (jelly.js, copied from Lumen
+   unchanged, so every spring matches Lumen 1:1). Nothing runs while Grab sits idle: no animation frame loop, no
+   timers; the only CSS loop is the hero banner's drifting dots, which pause whenever Grab is hidden or not in front. */
 (() => {
   const G = window.grab;
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const sel = (id) => (window.CSS && CSS.escape ? CSS.escape(id) : String(id).replace(/["\\]/g, '\\$&'));
+  const errText = (e) => String((e && e.message) || e || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const RS = document.documentElement.style;
+  const kick = (el, s = 0.6, hop = 0.4) => { if (el && window.Jelly) requestAnimationFrame(() => Jelly.kick(el, s, hop)); };
 
+  const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
   const S = {
-    info: { platform: 'darwin' }, cat: { ready: false, popular: [], count: 0 }, view: 'discover', q: '', results: [],
-    packs: [], pack: null, freeOnly: (() => { try { return localStorage.getItem('grab-free') === '1'; } catch { return false; } })(), scan: null, jobsById: new Map(), jobsByItem: new Map(), items: new Map(), installed: new Set(), removed: new Set(),
+    info: { platform: 'darwin' }, cat: { ready: false, popular: [], count: 0 }, view: 'discover', q: '', results: [], resultsQ: '',
+    packs: [], pack: null, freeOnly: (() => { try { return localStorage.getItem('grab-free') === '1'; } catch { return false; } })(),
+    scan: null, jobsById: new Map(), jobsByItem: new Map(), items: new Map(), installed: new Set(), removed: new Set(), instFilter: '', busy: new Set(),
   };
   const isMac = () => S.info.platform === 'darwin';
   const view = $('#view');
@@ -22,38 +30,104 @@
     globe: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>',
     link: '<svg viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>',
     box: '<svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>',
-    up: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>',
-    dl: '<svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg>',
+    up: '<svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.8h-4.8"/></svg>',
+    dl: '<svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg>',
     search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>',
     tag: '<svg viewBox="0 0 24 24"><path d="M3.5 12.6V5a1.5 1.5 0 0 1 1.5-1.5h7.6L20.5 11.4a1.5 1.5 0 0 1 0 2.1l-7 7a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.3"/></svg>',
     back: '<svg viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"/></svg>',
     trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.8h6V7M6.5 7l1 13h9l1-13"/></svg>',
+    arrow: '<svg class="varrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+    grid: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/></svg>',
+    compass: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>',
+    sliders: '<svg viewBox="0 0 24 24"><path d="M5 7h9M18 7h1M5 12h2M11 12h8M5 17h7M16 17h3"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/></svg>',
+    spark: '<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.5 2.5M15.2 15.2l2.5 2.5M6.3 17.7l2.5-2.5M15.2 8.8l2.5-2.5"/></svg>',
+    wave: '<svg viewBox="0 0 24 24"><path d="M3 12c2.5-4 5-4 7.5 0s5 4 7.5 0 2.5-2 3-2"/><path d="M3 17c2.5-4 5-4 7.5 0s5 4 7.5 0"/></svg>',
+    offline: '<svg viewBox="0 0 24 24"><path d="M3 9.5a14 14 0 0 1 18 0M6.5 13a9 9 0 0 1 11 0M10 16.5a4 4 0 0 1 4 0"/><path d="M4 4l16 16"/></svg>',
   };
+  const heart = (on) => `<svg viewBox="0 0 24 24"${on ? ' style="fill:#ec4899;stroke:#ec4899"' : ''}><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>`;
+  const MARK = '<svg class="mark" viewBox="0 0 64 64"><use href="#grab-mark"/></svg>';
+  // the giant outline glyph in each hero, drawn on a 24px grid
+  const GLYPH = {
+    grab: '<svg viewBox="0 0 24 24"><path d="M12 3.5v10"/><path d="M8 9.5l4 4 4-4"/><path d="M5 15.5v1.8A2.2 2.2 0 0 0 7.2 19.5h9.6a2.2 2.2 0 0 0 2.2-2.2v-1.8"/><circle cx="12" cy="12" r="10.5"/></svg>',
+    up: I.up, grid: I.grid, dl: I.dl, heart: heart(false), sliders: I.sliders, box: I.box, search: I.search, link: I.link, offline: I.offline, spark: I.spark,
+  };
+  const SEC = { discover: 'var(--accent)', updates: '#12b886', installed: '#8b5cf6', downloads: '#06b6d4', saved: '#ec4899', settings: '#f59e0b' };
+
+  // ---------- appearance: Lumen's palette, light, dark or follow the system ----------
+  const ACCENTS = [['Blue', '#5b8cff'], ['Violet', '#7c5cff'], ['Pink', '#e5487d'], ['Orange', '#f0763b'], ['Gold', '#e8b22c'], ['Green', '#2fb67c'], ['Teal', '#16a3b8'], ['Graphite', '#7a7d87']];
+  const OLD_THEMES = { violet: '#5b8cff', sunset: '#f0763b', mint: '#2fb67c', candy: '#e5487d', lime: '#2fb67c' }; // 1.x colour names
+  S.accent = store.get('grab-accent', null) || OLD_THEMES[store.get('grab-theme', '')] || '#5b8cff';
+  function applyAccent(c) { if (!ACCENTS.some(a => a[1] === c)) c = '#5b8cff'; S.accent = c; RS.setProperty('--accent', c); store.set('grab-accent', c); }
+  applyAccent(S.accent);
+  const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+  const paintScheme = () => document.documentElement.classList.toggle('dark', darkMQ.matches);
+  darkMQ.addEventListener('change', paintScheme); paintScheme();
+  S.appearance = store.get('grab-appearance', 'system');
+  function applyAppearance(m) { S.appearance = ['system', 'light', 'dark'].includes(m) ? m : 'system'; store.set('grab-appearance', S.appearance); if (G.appearance) G.appearance(S.appearance).catch(() => {}); }
+
+  // ---------- motion: Lumen's Jelly (ui/jelly.js), same springs, same selectors as Lumen's pages ----------
+  const OLD_MOTION = { chill: 'calm', bouncy: 'jelly', max: 'jelly' };
+  function setMotion(m) { S.motion = ['jelly', 'calm', 'off'].includes(m) ? m : 'jelly'; store.set('grab-motion-v3', S.motion); document.body.dataset.motion = S.motion; if (window.Jelly) Jelly.setMode(S.motion); }
+  setMotion(store.get('grab-motion-v3', null) || OLD_MOTION[(() => { try { return localStorage.getItem('grab-motion-v2'); } catch { return ''; } })()] || 'jelly');
+  if (window.Jelly) {
+    Jelly.init({ buttons: '.btn, .chip, .sw, .seg-b, .nav-btn, .clear, .tg, .lnk, .brand', cards: '.card, .pack, .stat, .hero-ic, .e-orb, .urlcard', press: '.rowi, .dl, .fact' });
+    Jelly.smoothScroll(view);
+  }
+
+  // ---------- hero banners: Lumen's lights (pages/app.js heroBack) with seeded drifting dots ----------
+  function heroDots(seed) {
+    let h = 2166136261; for (const c of String(seed)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+    const rnd = () => ((h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909)) >>> 0) / 4294967296;
+    const layer = sets => { const img = [], size = [], pos = [];
+      for (const [n, tile, r, col] of sets) { const th = Math.round(tile * (0.8 + rnd() * 0.4)), px = Math.round(rnd() * tile), py = Math.round(rnd() * th);
+        for (let i = 0; i < n; i++) { img.push(`radial-gradient(circle at ${(rnd() * 100).toFixed(1)}% ${(rnd() * 100).toFixed(1)}%, ${col} ${r}px, transparent ${r + 1.2}px)`); size.push(`${tile}px ${th}px`); pos.push(`${px}px ${py}px`); } }
+      return `background-image:${img.join(',')};background-size:${size.join(',')};background-position:${pos.join(',')}`; };
+    const svg = x => `url('data:image/svg+xml,${encodeURIComponent(x)}')`;
+    const star = (x, y, r) => `M${x} ${(y - r).toFixed(1)}Q${x} ${y} ${(x + r).toFixed(1)} ${y}Q${x} ${y} ${x} ${(y + r).toFixed(1)}Q${x} ${y} ${(x - r).toFixed(1)} ${y}Q${x} ${y} ${x} ${(y - r).toFixed(1)}Z`;
+    let sp = '', specks = '';
+    for (let i = 0; i < 3; i++) sp += star(Math.round(20 + rnd() * 340), Math.round(20 + rnd() * 260), 3.5 + rnd() * 4);
+    for (let i = 0; i < 4; i++) { const x = Math.round(10 + rnd() * 360), y = Math.round(10 + rnd() * 280); specks += `<circle cx="${x}" cy="${y}" r="5" fill="white" fill-opacity=".12"/><circle cx="${x}" cy="${y}" r="1.7" fill="white"/>`; }
+    const bright = `<svg xmlns="http://www.w3.org/2000/svg" width="380" height="300">${specks}<path d="${sp}" fill="white"/></svg>`;
+    const pts = []; for (let i = 0; i < 6; i++) pts.push([Math.round(480 + rnd() * 470), Math.round(40 + rnd() * 240)]); pts.sort((a, b) => a[0] - b[0]);
+    const cons = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 320" preserveAspectRatio="xMidYMid slice"><path d="M${pts.map(q => q.join(' ')).join('L')}" fill="none" stroke="white" stroke-opacity=".24" stroke-width=".9" stroke-dasharray="2 4"/>${pts.map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="${i % 3 ? 1.5 : 2.4}" fill="white" fill-opacity="${i % 3 ? 0.5 : 0.85}"/>`).join('')}</svg>`;
+    return `<span class="dots"><b class="cons" style="background-image:${svg(cons)}"></b><i class="hd1" style="${layer([[9, 150 + Math.round(rnd() * 40), 1, 'var(--hd1)'], [6, 210 + Math.round(rnd() * 60), 1.4, 'var(--hd2)']])}"></i><i class="hd3" style="background-image:${svg(bright)};background-size:380px 300px;background-position:${Math.round(rnd() * 380)}px ${Math.round(rnd() * 300)}px"></i></span>`;
+  }
+  const heroBg = (glyph, seed, dots = true) => `<span class="hb" aria-hidden="true"><i class="orb a"></i><i class="orb b"></i><i class="orb c"></i><i class="orb d"></i>${dots ? heroDots(seed) : ''}<i class="grain"></i><span class="art glow">${glyph}</span><span class="art depth">${glyph}</span><span class="art">${glyph}</span><i class="glint"></i></span>`;
+  function hero({ ic, glyph, icon, eye, chip, title, lead, extra = '', seed, cls = '', back = false }) {
+    return `<div class="hero enter${back ? ' has-back' : ''}${cls ? ' ' + cls : ''}" style="--ic:${ic}">${heroBg(glyph, seed || title)}${back ? `<button class="btn onink small back" data-pack-back>${I.back}Back</button>` : ''}${icon ? `<div class="hero-ic">${icon}</div>` : ''}<div class="hero-tx"><div class="hero-eye"><span>${esc(eye)}</span><i></i>${chip != null && chip !== '' ? `<b>${chip}</b>` : ''}</div><h1>${title}</h1>${lead ? `<p class="lead">${lead}</p>` : ''}${extra}</div></div>`;
+  }
+  // the dots stop when the hero is off screen, and when Grab is hidden or not the app in front (exactly as in Lumen)
+  const heroIO = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => e.target.classList.toggle('dots-off', !e.isIntersecting))) : null;
+  const vis = () => document.documentElement.classList.toggle('lm-hidden', document.hidden || !document.hasFocus());
+  document.addEventListener('visibilitychange', vis); addEventListener('blur', vis); addEventListener('focus', vis); vis();
+  function watchHeroes(root) { if (heroIO) for (const h of $$('.hero', root)) heroIO.observe(h); }
 
   // ---------- helpers ----------
   function remember(list) { for (const it of list || []) if (it && it.id) S.items.set(it.id, { ...(S.items.get(it.id) || {}), ...it }); return list || []; }
   function fmtBytes(n) { if (!n) return '0 MB'; const u = ['B', 'KB', 'MB', 'GB']; let i = 0; while (n >= 1024 && i < 3) { n /= 1024; i++; } return (i >= 2 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i]; }
   function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; }
+  const hueColor = (s) => `hsl(${hue(s)} 72% 58%)`;
   function isInstalled(it) { if (!it) return false; if (S.removed.has(it.id)) return false; return !!(it.installed || S.installed.has(it.id)); }
   function updateFor(id) { return S.scan && S.scan.find(s => s.id === id && s.update); }
   function verLabel(it) { const v = String(it.ver || '').split(',')[0]; return v && v !== 'latest' ? 'v' + v : ''; }
-  function subLine(it) { return isMac() ? (it.desc || it.home || '') : `${it.publisher || ''}${it.publisher ? ' · ' : ''}${it.id}`; }
+  function subLine(it) { return isMac() ? (it.desc || it.home || '') : (it.mdesc || `${it.publisher || ''}${it.publisher ? ' · ' : ''}${it.id}`); }
+  const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+  const ACTIVE = ['queued', 'downloading', 'installing'];
+  const busyJob = (id) => { const j = S.jobsByItem.get(id); return !!j && (ACTIVE.includes(j.state) || j.state === 'needs-quit'); };
+  const grabbable = (it) => !isInstalled(S.items.get(it.id) || it) && !it.price && !busyJob(it.id); // for Get all: skip installed, paid and already running
 
   // ---------- icons ----------
-  const favState = new Map(); // home -> 'ok' | 'bad'
   const realIcons = new Map(); // path -> dataURL
   function iconHTML(it) {
     const name = (it.name || '?').trim();
     const ch = (name.match(/[A-Za-z0-9]/) || [name[0] || '?'])[0].toUpperCase();
     const h = hue(it.id || name);
-    return `<div class="ic" data-id="${esc(it.id || '')}" data-icons="${esc((it.icons || []).join('|'))}" data-fav="${esc(it.fav || '')}" data-home="${esc(it.home || '')}" data-path="${esc(it.path || '')}"><div class="letter" style="background:linear-gradient(135deg,hsl(${h} 70% 58%),hsl(${(h + 40) % 360} 75% 45%))">${esc(ch)}</div><img alt=""></div>`;
+    return `<div class="ic" data-id="${esc(it.id || '')}" data-icons="${esc((it.icons || []).join('|'))}" data-fav="${esc(it.fav || '')}" data-path="${esc(it.path || '')}"><div class="letter" style="background:linear-gradient(145deg,hsl(${h} 80% 64%),hsl(${(h + 34) % 360} 74% 46%));--lc:hsl(${h} 70% 45% / .6)">${esc(ch)}</div><img alt=""></div>`;
   }
-  // Icon sources, best first: winget's own icon, GitHub owner avatar (for GitHub-hosted apps), Google's favicon service, DuckDuckGo, Google s2.
   const metaCache = new Map();
   const iconMem = (() => { try { return JSON.parse(localStorage.getItem('grab-icons-v4') || '{}'); } catch { return {}; } })();
   let iconMemT = null;
   function iconRemember(id, url) { if (!id || String(url).startsWith('data:')) return; iconMem[id] = url; clearTimeout(iconMemT); iconMemT = setTimeout(() => { try { localStorage.setItem('grab-icons-v4', JSON.stringify(iconMem)); } catch {} }, 800); }
-  function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } }
   // Sources in order: the app's real icon(s), then its own site's logo (main decides if that's allowed and checks it exists).
   function markReal(box, img) { img.classList.add('real'); box.classList.add('has-real'); }
   async function loadChain(box, img, srcs, id) {
@@ -62,7 +136,7 @@
     let u = src.u;
     if (src.fav) { u = await G.fav(src.fav).catch(() => null); if (!u) return loadChain(box, img, srcs, id); }
     img.onload = () => {
-      if (img.naturalWidth >= 24) { if (!src.fav) { markReal(box, img); iconRemember(id, u); } img.classList.add('on'); box.classList.add('has-img'); jellyIn(box); }
+      if (img.naturalWidth >= 24) { if (!src.fav) { markReal(box, img); iconRemember(id, u); } img.classList.add('on'); box.classList.add('has-img'); }
       else loadChain(box, img, srcs, id);
     };
     img.onerror = () => loadChain(box, img, srcs, id);
@@ -71,12 +145,12 @@
   function hydrateIcons(root = document) {
     for (const box of $$('.ic:not([data-h])', root)) {
       box.dataset.h = '1';
-      const img = $('img', box);
+      const img = $('img', box); if (!img) continue;
       const p = box.dataset.path, id = box.dataset.id;
       const setReal = (url) => { img.className = 'real on'; img.src = url; box.classList.add('has-img', 'has-real'); };
       if (p) {
         if (realIcons.has(p)) { setReal(realIcons.get(p)); continue; }
-        G.icon(p).then(u => { if (u) { realIcons.set(p, u); setReal(u); jellyIn(box); } else start(); });
+        G.icon(p).then(u => { if (u) { realIcons.set(p, u); setReal(u); } else start(); }).catch(() => start());
         continue;
       }
       start();
@@ -87,7 +161,7 @@
           if (m === undefined) { m = await G.meta(id).catch(() => null); metaCache.set(id, m); }
           if (m) {
             if (m.icon) icons = [m.icon]; fav = m.fav || '';
-            if (m.desc) { const card = box.closest('[data-open]'); const d = card && $('.desc', card); if (d && !d.dataset.meta) { d.dataset.meta = '1'; d.textContent = m.desc; } const it = S.items.get(id); if (it) { it.mdesc = m.desc; it.mhome = m.home; } }
+            if (m.desc) { const card = box.closest('[data-open]'); const d = card && $('.c-desc', card); if (d && !d.dataset.meta) { d.dataset.meta = '1'; d.textContent = m.desc; } const it = S.items.get(id); if (it) { it.mdesc = m.desc; it.mhome = m.home; } }
           }
         }
         // order: real icon, the app's own site logo, then the open icon library (Mac's last entry)
@@ -105,190 +179,24 @@
     }
   }
 
-  // ---------- living jelly: one underdamped spring engine drives hover, press, pull and every wobble ----------
-  // CSS easings sampled from the same spring (damped harmonic oscillator), so entrances wobble the same way.
-  function springEasing(stiffness, damping, mass = 1) {
-    const w0 = Math.sqrt(stiffness / mass), z = damping / (2 * Math.sqrt(stiffness * mass));
-    const wd = w0 * Math.sqrt(Math.max(0, 1 - z * z));
-    const x = (t) => z < 1 ? 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + (z * w0 / wd) * Math.sin(wd * t)) : 1 - Math.exp(-w0 * t) * (1 + w0 * t);
-    let T = 0; while (T < 6 && !(Math.abs(1 - x(T)) < 0.002 && Math.abs(1 - x(T + 0.05)) < 0.002 && Math.abs(1 - x(T + 0.11)) < 0.002)) T += 0.02;
-    const N = 140, pts = []; for (let i = 0; i <= N; i++) pts.push(+x((i / N) * T).toFixed(4));
-    pts[N] = 1;
-    return { css: `linear(${pts.join(', ')})`, ms: Math.round(T * 1000) };
-  }
-  const RS = document.documentElement.style;
-  const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // JELLY: damping ratio about 0.19, so every move overshoots by roughly half and wobbles five or more times before it settles.
-  const LV = {
-    chill: { pop: 0, btn: 1.04, card: 1.01, soft: 1.01, tilt: 3, press: 0.96, mag: 0.08, K: 230, C: 18, skew: 1, band: 50, mk: 0.5, burst: 'cubic-bezier(.3,1.25,.5,1)' },
-    bouncy: { pop: 1.5, btn: 1.1, card: 1.03, soft: 1.015, tilt: 8, press: 0.88, mag: 0.2, K: 220, C: 11, skew: 3, band: 90, mk: 1, burst: 'cubic-bezier(.34,1.56,.64,1)' },
-    max: { pop: 3.5, btn: 1.15, card: 1.04, soft: 1.02, tilt: 12, press: 0.8, mag: 0.28, K: 210, C: 8, skew: 6, band: 160, mk: 1.7, burst: 'cubic-bezier(.3,2.4,.5,1)' },
-  };
-  const SP = { jelly: null, bouncy: null, soft: springEasing(170, 24) };
-  let L = LV.max, MK = 1.7, MLEVEL = 'max';
-  function setMotion(name) {
-    MLEVEL = LV[name] ? name : 'max'; L = LV[MLEVEL]; MK = L.mk;
-    const sp = springEasing(L.K, L.C); SP.jelly = SP.bouncy = sp;
-    RS.setProperty('--mk', MK); RS.setProperty('--jelly', sp.css); RS.setProperty('--bouncy', sp.css); RS.setProperty('--soft', SP.soft.css);
-    RS.setProperty('--jelly-ms', sp.ms + 'ms'); RS.setProperty('--spring', L.burst);
-    document.body.dataset.motion = MLEVEL; try { localStorage.setItem('grab-motion-v2', MLEVEL); } catch {}
-  }
-  setMotion((() => { try { return localStorage.getItem('grab-motion-v2') || 'bouncy'; } catch { return 'bouncy'; } })());
-
-  const J = (() => {
-    const act = new Set(); let last = 0, running = false;
-    const CH = [['x', 'vx', 'tx'], ['y', 'vy', 'ty'], ['s', 'vs', 'ts'], ['rx', 'vrx', 'trx'], ['ry', 'vry', 'try']];
-    const get = (el) => el._j || (el._j = { el, x: 0, y: 0, s: 1, rx: 0, ry: 0, vx: 0, vy: 0, vs: 0, vrx: 0, vry: 0, tx: 0, ty: 0, ts: 1, trx: 0, try: 0 });
-    function wake(o) { act.add(o); o.el.classList.add('jx'); if (!running) { running = true; last = performance.now(); requestAnimationFrame(tick); } }
-    function to(el, t) { if (REDUCE || !el) return null; const o = get(el); Object.assign(o, t); wake(o); return o; }
-    function kick(el, v) { if (REDUCE || !el) return; const o = get(el); for (const k in v) o[k] += v[k]; wake(o); }
-    function tick(now) {
-      const dt = Math.min(0.034, Math.max(0.001, (now - last) / 1000)); last = now;
-      const n = Math.max(1, Math.round(dt / 0.004)), h = dt / n;
-      for (const o of act) {
-        if (!o.el.isConnected) { act.delete(o); continue; }
-        for (let i = 0; i < n; i++) for (const [p, v, t] of CH) { o[v] += (L.K * (o[t] - o[p]) - (o.C || L.C) * o[v]) * h; o[p] += o[v] * h; }
-        let rest = true;
-        for (const [p, v, t] of CH) { const sc = p === 's' ? 400 : p === 'x' || p === 'y' ? 4 : 8; if (Math.abs(o[t] - o[p]) * sc > 1 || Math.abs(o[v]) * sc > 6) { rest = false; break; } }
-        const st = o.el.style;
-        if (rest) {
-          for (const [p, v, t] of CH) { o[p] = o[t]; o[v] = 0; }
-          const idle = o.ts === 1 && !o.tx && !o.ty && !o.trx && !o.try;
-          st.scale = o.ts === 1 ? '' : `${o.ts} ${o.ts}`; st.translate = o.tx || o.ty ? `${o.tx}px ${o.ty}px` : '';
-          const a0 = Math.hypot(o.trx, o.try); st.transform = a0 > 0.05 ? `perspective(900px) rotateX(${o.trx}deg) rotateY(${o.try}deg)` : '';
-          if (idle) o.el.classList.remove('jx');
-          act.delete(o); continue;
-        }
-        // squash and stretch: whatever the size is doing right now, one axis leads and the other lags (up to 45%)
-        const d = Math.max(-0.22, Math.min(0.22, o.vs * 0.06));
-        st.scale = `${Math.max(0.05, o.s * (1 + d)).toFixed(4)} ${Math.max(0.05, o.s * (1 - d)).toFixed(4)}`;
-        st.translate = `${o.x.toFixed(2)}px ${o.y.toFixed(2)}px`;
-        const a = Math.hypot(o.rx, o.ry);
-        st.transform = a > 0.05 ? `perspective(900px) rotateX(${o.rx.toFixed(2)}deg) rotateY(${o.ry.toFixed(2)}deg)` : '';
-      }
-      if (act.size) requestAnimationFrame(tick); else running = false;
-    }
-    return { to, kick, get };
-  })();
-  // one-shot wobble (state changes, toasts, badges...)
-  function jelly(el, k = 1) { J.kick(el, { vs: Math.min(5, 2.4 * k * MK) }); }
-  function jellyIn(el) {
-    if (!el || REDUCE || !el.animate) return;
-    el.animate([{ scale: '.5 .5', opacity: 0 }, { scale: '1 1', opacity: 1 }], { duration: SP.jelly.ms, easing: SP.jelly.css });
-  }
-
-  // hover swells and pulls toward the cursor, cards tilt in 3D, pressing squashes, releasing pops
-  (() => {
-    const BTN = '.btn, .chip, .sw, .seg-b, .clear', CARD = '.card, .pack', SOFT = '.nav-btn, .rowi, .dl, .set, .search, .self-card, .brand';
-    const ALL = `${BTN}, ${CARD}, ${SOFT}`;
-    const kind = (el) => (el.matches(BTN) ? 'btn' : el.matches(CARD) ? 'card' : 'soft');
-    const hov = new Set(); let pressed = null, drag = null;
-    const rest = (el) => (hov.has(el) ? L[kind(el)] : 1);
-    // a swollen, tilted button drifts under the cursor, so it keeps a generous halo: still hovered, still clickable
-    const near = (el, x, y, m) => { const r = el.getBoundingClientRect(); return x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m; };
-    const held = (x, y, t, m) => { for (const el of hov) if (el.isConnected && kind(el) === 'btn' && !el.disabled && (el.contains(t) || near(el, x, y, m))) return el; return null; };
-    const unhover = (el) => { hov.delete(el); if (drag && drag.el === el) return; J.to(el, { ts: pressed === el ? L.press : 1, tx: 0, ty: 0, trx: 0, try: 0 }); };
-    document.addEventListener('click', (e) => {
-      if (!e.isTrusted) return;
-      const b = held(e.clientX, e.clientY, e.target, 16);
-      if (b && !b.contains(e.target)) { e.stopPropagation(); e.preventDefault(); b.click(); }
-    }, true);
-    document.addEventListener('pointerover', (e) => {
-      if (REDUCE || e.pointerType === 'touch') return;
-      for (let el = e.target.closest && e.target.closest(ALL); el; el = el.parentElement && el.parentElement.closest(ALL)) {
-        if (hov.has(el)) continue; hov.add(el);
-        J.to(el, { ts: pressed === el ? L.press : rest(el) });
-        if (kind(el) === 'btn' && pressed !== el && L.pop) J.kick(el, { vs: L.pop }); // swings out to ~1.75x, then wobbles down to 1.3x
-      }
-    });
-    document.addEventListener('pointerout', (e) => {
-      for (const el of [...hov]) if (!el.isConnected || (!el.contains(e.relatedTarget) && !(kind(el) === 'btn' && e.relatedTarget && near(el, e.clientX, e.clientY, 24)))) unhover(el);
-    });
-    document.addEventListener('pointermove', (e) => {
-      for (const el of hov) {
-        if (!el.isConnected) { hov.delete(el); continue; }
-        const k = kind(el); if (k === 'soft') continue;
-        if (k === 'btn' && !el.contains(e.target) && !near(el, e.clientX, e.clientY, 24)) { unhover(el); continue; }
-        const o = J.get(el), r = el.getBoundingClientRect();
-        if (k === 'btn') { J.to(el, { tx: (e.clientX - (r.left + r.width / 2 - o.x)) * L.mag, ty: (e.clientY - (r.top + r.height / 2 - o.y)) * L.mag }); }
-        else if (!(drag && drag.el === el)) { const px = (e.clientX - r.left) / r.width - 0.5, py = (e.clientY - r.top) / r.height - 0.5; J.to(el, { trx: -py * 2 * L.tilt, try: px * 2 * L.tilt }); }
-      }
-      // pull: a pressed card, pack or row follows the cursor like rubber
-      if (drag && e.pointerId === drag.id) {
-        const dx = e.clientX - drag.x, dy = e.clientY - drag.y, dist = Math.hypot(dx, dy);
-        if (!drag.on && dist < 7) return; drag.on = true;
-        const f = 0.5 / (1 + dist / 600); J.to(drag.el, { tx: dx * f, ty: dy * f });
-      }
-    });
-    document.addEventListener('pointerdown', (e) => {
-      if (REDUCE || e.button !== 0) return;
-      const hb = held(e.clientX, e.clientY, e.target, 16);
-      const el = hb || (e.target.closest && e.target.closest(ALL)); if (!el) return;
-      pressed = el; J.to(el, { ts: L.press, C: 15 }); // the squash itself lands firmly; the release is what bounces
-      const c = e.target.closest('.card, .pack, .rowi, .dl'); if (c && !hb && !e.target.closest('button')) drag = { el: c, x: e.clientX, y: e.clientY, id: e.pointerId, on: false };
-    });
-    const up = () => {
-      if (pressed) { const el = pressed; pressed = null; J.to(el, { ts: rest(el), C: 0 }); J.kick(el, { vs: 2.2 * MK }); }
-      if (drag) {
-        const d = drag; drag = null; J.to(d.el, { tx: 0, ty: 0 });
-        if (d.on) { const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); }; document.addEventListener('click', stop, { capture: true, once: true }); setTimeout(() => document.removeEventListener('click', stop, { capture: true }), 60); }
-      }
-    };
-    document.addEventListener('pointerup', up); document.addEventListener('pointercancel', up);
-  })();
-  // icons wobble when you hover their card
-  document.addEventListener('pointerover', (e) => {
-    const c = e.target.closest && e.target.closest('.card, .rowi'); if (!c || c.contains(e.relatedTarget)) return;
-    const ic = $('.ic', c); if (!ic || REDUCE || !ic.animate) return;
-    ic.animate([{ rotate: '0deg', scale: '1 1' }, { rotate: '-12deg', scale: '1.2 .82' }, { rotate: '10deg', scale: '.86 1.16' }, { rotate: '-6deg', scale: '1.08 .94' }, { rotate: '3deg', scale: '.97 1.03' }, { rotate: '0deg', scale: '1 1' }], { duration: 900, easing: 'ease-out' });
-  });
-  // headline letters squash, stretch and bounce when the cursor runs over them
-  document.addEventListener('pointerover', (e) => { const l = e.target.closest && e.target.closest('.l'); if (l) J.kick(l, { vy: -520 * MK, vs: 4.5 * MK }); });
-  $('#q').addEventListener('focus', () => jelly($('#search-wrap'), 0.5));
-
-  // ---------- juice: confetti burst, click ripples, 3D tilt ----------
-  function burst(el, n = 14) {
-    if (REDUCE || !el || !el.getBoundingClientRect) return;
-    const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    const cols = ['#7C5CFF', '#4F7BFF', '#22D3EE', '#34d399', '#f472b6', '#fbbf24'];
-    for (let i = 0; i < n; i++) {
-      const d = document.createElement('i'); d.className = 'bit';
-      const a = (i / n) * Math.PI * 2 + Math.random() * 0.5, dist = 46 + Math.random() * 70, s = 5 + Math.random() * 6;
-      d.style.cssText = `left:${cx}px;top:${cy}px;width:${s}px;height:${s}px;background:${cols[i % cols.length]};border-radius:${Math.random() > 0.5 ? '50%' : '2px'}`;
-      document.body.appendChild(d);
-      d.animate([{ transform: 'translate(-50%,-50%) scale(0)', opacity: 1 }, { transform: `translate(calc(-50% + ${Math.cos(a) * dist}px), calc(-50% + ${Math.sin(a) * dist}px)) scale(1.2) rotate(${Math.random() * 360}deg)`, opacity: 1, offset: 0.55 }, { transform: `translate(calc(-50% + ${Math.cos(a) * dist * 1.15}px), calc(-50% + ${Math.sin(a) * dist * 1.15 + 34}px)) scale(0) rotate(${Math.random() * 720}deg)`, opacity: 0 }], { duration: 850 + Math.random() * 350, easing: 'cubic-bezier(.15,.8,.3,1)' }).onfinish = () => d.remove();
-    }
-  }
-  document.addEventListener('pointerdown', (e) => {
-    const b = e.target.closest('.btn, .nav-btn, .pack, .chip.tog'); if (!b || REDUCE) return;
-    const r = b.getBoundingClientRect(), w = document.createElement('i'); w.className = 'rip';
-    const size = Math.max(r.width, r.height) * 2.2;
-    w.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
-    if (getComputedStyle(b).position === 'static') b.style.position = 'relative';
-    b.appendChild(w);
-    w.animate([{ transform: 'scale(0)', opacity: 0.35 }, { transform: 'scale(1)', opacity: 0 }], { duration: 620, easing: 'cubic-bezier(.2,.7,.2,1)' }).onfinish = () => w.remove();
-  });
-  document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && ['1', '2', '3', '4', '5', '6'].includes(e.key)) { e.preventDefault(); const b = $$('.nav-btn')[+e.key - 1]; if (b) { b.click(); jelly(b, 0.8); } }
-  });
-  $('.brand').addEventListener('click', () => { jelly($('.logo'), 2.5); burst($('.logo'), 18); });
-
-  // ---------- action button ----------
+  // ---------- the action button ----------
   function actionHTML(it, extraClass = '') {
     const id = esc(it.id);
     const j = S.jobsByItem.get(it.id);
     const cls = extraClass ? ' ' + extraClass : '';
-    if (j && ['queued', 'downloading', 'installing'].includes(j.state)) {
+    if (j && ACTIVE.includes(j.state)) {
       const pct = j.state === 'downloading' && (j.total || j.pct) ? Math.round(j.pct) : null;
       const label = j.state === 'queued' ? 'Waiting' : j.state === 'installing' ? (j.stage || 'Installing') : pct != null ? pct + '%' : (j.stage || 'Starting');
-      return `<button class="btn prog${pct == null ? ' indet' : ''}${cls}" data-act="${id}" data-do="cancel" data-job="${j.id}" title="Click to cancel"><i class="fill" style="width:${pct || 0}%"></i><span>${esc(label)}</span><i class="x">${I.x}</i></button>`;
+      // an install that is already copying files cannot be stopped halfway, so it offers no cancel
+      if (j.state === 'installing') return `<button class="btn prog nox indet${cls}" data-act="${id}" data-do="none" data-job="${j.id}"><i class="fill"></i><span>${esc(label)}</span></button>`;
+      return `<button class="btn prog${pct == null ? ' indet' : ''}${cls}" data-act="${id}" data-do="cancel" data-job="${j.id}" title="Cancel"><i class="fill" style="width:${pct || 0}%"></i><span>${esc(label)}</span><i class="x">${I.x}</i></button>`;
     }
-    if (j && j.state === 'needs-quit') return `<button class="btn btn-warn${cls}" data-act="${id}" data-do="quit" data-job="${j.id}" title="${esc(j.msg)}">Quit &amp; install</button>`;
-    if (j && j.state === 'error') return `<button class="btn btn-bad${cls}" data-act="${id}" data-do="${j.verb === 'update' ? 'update' : 'get'}" title="${esc(j.msg)}">Retry</button>`;
-    if (updateFor(it.id) && !(j && j.state === 'done' && j.verb !== 'uninstall')) return `<button class="btn btn-solid${cls}" data-act="${id}" data-do="update">Update</button>`;
+    if (j && j.state === 'needs-quit') return `<button class="btn btn-warn${cls}" data-act="${id}" data-do="quit" data-job="${j.id}" title="${esc(j.msg)}">Quit and install</button>`;
+    if (j && j.state === 'error') return `<button class="btn btn-bad${cls}" data-act="${id}" data-do="${j.verb === 'update' ? 'update' : 'get'}" title="${esc(j.msg)}">${I.up}Retry</button>`;
+    if (updateFor(it.id) && !(j && j.state === 'done' && j.verb !== 'uninstall')) return `<button class="btn btn-solid${cls}" data-act="${id}" data-do="update">${I.up}Update</button>`;
     if (isInstalled(it)) return isMac() ? `<button class="btn btn-ok${cls}" data-act="${id}" data-do="open">Open</button>` : `<button class="btn btn-ok${cls}" data-act="${id}" data-do="detail">${I.check}Installed</button>`;
     // paid apps: the developer's stated trial if there is one, otherwise Buy (opens the developer's website)
-    if (it.price && it.trial) return `<button class="btn btn-get btn-trial${cls}" data-act="${id}" data-do="get" title="${esc(it.trial.note)}">${esc(it.trial.label)}</button>`;
+    if (it.price && it.trial) return `<button class="btn btn-trial${cls}" data-act="${id}" data-do="get" title="${esc(it.trial.note)}">${esc(it.trial.label)}</button>`;
     if (it.price) return `<button class="btn btn-buy${cls}" data-act="${id}" data-do="buy" title="Opens the developer's website">${I.tag}Buy</button>`;
     return `<button class="btn btn-get${cls}" data-act="${id}" data-do="get">Get</button>`;
   }
@@ -300,158 +208,59 @@
       const t = document.createElement('div');
       t.innerHTML = actionHTML(it, big);
       const nb = t.firstElementChild;
-      // keep the progress fill animating smoothly instead of replacing it
-      if (b.classList.contains('prog') && nb.classList.contains('prog') && b.dataset.job === nb.dataset.job) {
-        b.className = nb.className; b.title = nb.title;
+      // keep the progress fill moving smoothly instead of replacing it
+      if (b.classList.contains('prog') && nb.classList.contains('prog') && b.dataset.job === nb.dataset.job && !!$('.x', b) === !!$('.x', nb)) {
+        b.className = nb.className; b.title = nb.title; b.dataset.do = nb.dataset.do;
         $('.fill', b).style.width = $('.fill', nb).style.width;
         $('span', b).textContent = $('span', nb).textContent;
-      } else { b.replaceWith(nb); fluid.magnet(nb.parentElement); if (nb.matches('.btn-ok, .btn-warn, .btn-bad')) jelly(nb, 1.5); }
+      } else if (b.className !== nb.className || b.innerHTML !== nb.innerHTML || b.dataset.do !== nb.dataset.do) { b.replaceWith(nb); if (nb.matches('.btn-ok, .btn-warn, .btn-bad')) kick(nb, 0.9, 0.6); }
     }
   }
-
-  // ---------- fluid motion: smooth inertial scroll, velocity skew, reveals, magnetic buttons, cursor glow ----------
-  const fluid = (() => {
-    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const main = $('.main'), blob = $('#blob'), glow = $('#sglow');
-    const goo = $$('#goo i'), gp = goo.map(() => ({ x: undefined, y: undefined, vx: 0, vy: 0 }));
-    let wave = 0, waveV = 0, waveShown = 0;
-    let target = 0, cur = 0, wheeling = false, vel = 0, lastTop = 0, idle = 0, over = 0, overV = 0, overShown = 0;
-    const maxScroll = () => Math.max(0, view.scrollHeight - view.clientHeight);
-    let pos = 0, sv = 0, lastWheel = 0, lastT = performance.now();
-    view.addEventListener('wheel', (e) => {
-      if (reduce || e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-      e.preventDefault();
-      if (!wheeling) { pos = target = view.scrollTop; sv = 0; }
-      const d = e.deltaY * (e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? view.clientHeight : 1);
-      // the target may run past either end (rubber band); it is pulled back as soon as the wheel stops
-      target = Math.max(-L.band, Math.min(maxScroll() + L.band, target + d));
-      wheeling = true; lastWheel = performance.now();
-    }, { passive: false });
-    // keyboard / scrollbar drags take over instantly
-    view.addEventListener('pointerdown', (e) => { if (e.target === view) { wheeling = false; over = 0; } });
-    addEventListener('keydown', (e) => { if (['PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', ' '].includes(e.key) && document.activeElement !== $('#q')) { wheeling = false; over = 0; } });
-    let mx = -999, my = -999, bx = -999, by = -999, skP = 0, skV = 0;
-    main.addEventListener('pointermove', (e) => { const r = main.getBoundingClientRect(); mx = e.clientX - r.left; my = e.clientY - r.top; main.classList.add('hov');
-      const c = e.target.closest && e.target.closest('.card');
-      if (c) { const cr = c.getBoundingClientRect(); c.style.setProperty('--mx', (e.clientX - cr.left) + 'px'); c.style.setProperty('--my', (e.clientY - cr.top) + 'px'); }
-    });
-    main.addEventListener('pointerleave', () => main.classList.remove('hov'));
-    (function loop() {
-      requestAnimationFrame(loop);
-      const now = performance.now(), dt = Math.min(0.034, Math.max(0.001, (now - lastT) / 1000)); lastT = now;
-      if (wheeling) {
-        const mxs = maxScroll(), idleW = now - lastWheel > 110;
-        if (idleW) target = Math.max(0, Math.min(mxs, target));
-        if (MLEVEL !== 'chill') { // underdamped: overshoots the target and bounces back several times
-          const n = Math.max(1, Math.round(dt / 0.004)), h = dt / n;
-          for (let i = 0; i < n; i++) { sv += (150 * (target - pos) - 8.5 * sv) * h; pos += sv * h; }
-        } else { pos += (target - pos) * (1 - Math.pow(0.86, dt * 60)); sv = 0; }
-        const real = Math.max(0, Math.min(mxs, pos));
-        view.scrollTop = real;
-        over = Math.max(-300, Math.min(300, real - pos));
-        if (idleW && Math.abs(target - pos) < 0.4 && Math.abs(sv) < 3) { pos = target; sv = 0; over = 0; wheeling = false; }
-      }
-      const top = view.scrollTop;
-      vel += ((top - lastTop - (over - overShown)) - vel) * 0.2; lastTop = top;
-      // past either end the page stretches like rubber instead of stopping
-      if (over !== overShown) { overShown = over; const vi = view.firstElementChild; if (vi) { vi.style.translate = over ? `0 ${over.toFixed(2)}px` : ''; vi.style.transformOrigin = over > 0 ? '50% 0' : '50% 100%'; vi.style.scale = over ? `1 ${(1 + Math.abs(over) / 1500).toFixed(4)}` : ''; } }
-      // skew is itself a loose spring: it chases the speed-driven angle (max 15deg) and swings past it before settling
-      { const tk = reduce ? 0 : Math.max(-L.skew, Math.min(L.skew, vel * -(L.skew / 40))), n = 4, h = dt / n; for (let i = 0; i < n; i++) { skV += (L.K * (tk - skP) - L.C * skV) * h; skP += skV * h; } skP = Math.max(-L.skew * 1.7, Math.min(L.skew * 1.7, skP)); }
-      const sk = reduce ? 0 : skP;
-      view.style.setProperty('--sk', sk.toFixed(3) + 'deg');
-      // jelly wave: content lags behind the scroll column by column, overshoots, and settles
-      const wt = reduce ? 0 : Math.max(-30, Math.min(30, vel * -1.2)) * MK;
-      waveV += (wt - wave) * 0.11; waveV *= 0.8; wave += waveV;
-      if (Math.abs(wave) < 0.02 && Math.abs(waveV) < 0.02) wave = waveV = 0;
-      if (wave !== waveShown) { waveShown = wave; view.style.setProperty('--vy', wave.toFixed(2) + 'px'); view.style.setProperty('--st', (1 + Math.min(0.05, Math.abs(wave) / 900)).toFixed(4)); }
-      // gooey cursor trail
-      // cursor trail on loose springs: each blob overshoots the cursor and stretches along its direction of travel
-      if (goo.length && mx > -999) for (let i = 0; i < gp.length; i++) {
-        const g = gp[i];
-        if (g.x === undefined || MLEVEL === 'chill') { g.x = g.x === undefined ? mx : g.x + (mx - g.x) * 0.2; g.y = g.y === undefined ? my : g.y + (my - g.y) * 0.2; g.vx = g.vy = 0; }
-        else { const K = 70 - i * 11, C = 3.4 - i * 0.3, n = 4, h = dt / n; for (let j = 0; j < n; j++) { g.vx += (K * (mx - g.x) - C * g.vx) * h; g.vy += (K * (my - g.y) - C * g.vy) * h; g.x += g.vx * h; g.y += g.vy * h; } }
-        const sp = Math.hypot(g.vx, g.vy), st = 1 + Math.min(1, sp / 1400);
-        goo[i].style.transform = `translate(${g.x.toFixed(1)}px, ${g.y.toFixed(1)}px) rotate(${Math.atan2(g.vy, g.vx).toFixed(3)}rad) scale(${st.toFixed(3)}, ${(1 / Math.sqrt(st)).toFixed(3)})`;
-      }
-      if (Math.abs(vel) > 0.5) { main.classList.add('scrolling'); idle = 0; } else if (++idle > 30) main.classList.remove('scrolling');
-      const h = view.clientHeight, sh = view.scrollHeight;
-      if (sh > h) { const th = Math.max(30, h * h / sh); glow.style.height = th + 'px'; glow.style.transform = `translateY(${view.offsetTop + (top / (sh - h)) * (h - th)}px)`; }
-      if (mx > -999) { bx += (mx - bx) * 0.08; by += (my - by) * 0.08; if (bx < -900) { bx = mx; by = my; } blob.style.transform = `translate(${bx - 260}px, ${by - 260}px)`; }
-    })();
-    const io = new IntersectionObserver((es) => {
-      let k = 0;
-      for (const e of es) if (e.isIntersecting) { e.target.style.setProperty('--d', (k++ % 14) * 38 + 'ms'); e.target.classList.add('on'); io.unobserve(e.target); }
-    }, { root: view, threshold: 0.06, rootMargin: '0px 0px 40px 0px' });
-    function reveal(root) {
-      for (const el of $$('.card, .rowi, .dl, .urlcard, .pack', root)) { if (reduce) continue; el.classList.add('rv'); io.observe(el); }
-      magnet(root);
-    }
-    function magnet() {} // hover pull is handled by the spring engine now
-    function counters(root) {
-      for (const el of $$('[data-count]', root)) {
-        const n = +el.dataset.count, t0 = performance.now();
-        (function f(now) { const p = Math.min((now - t0) / 1400, 1), e = 1 - Math.pow(1 - p, 4); el.textContent = Math.round(n * e).toLocaleString(); if (p < 1) requestAnimationFrame(f); })(t0);
-      }
-    }
-    function nav() {
-      const a = $('.nav-btn.active'), ind = $('#nav-ind');
-      if (a) {
-        const prev = ind._y, y = a.offsetTop;
-        ind.style.transform = `translateY(${y}px)`; ind.style.height = a.offsetHeight + 'px';
-        if (prev != null && prev !== y && ind.animate && !REDUCE) ind.animate([{ scale: '1 1' }, { scale: `.94 ${1 + Math.min(.6, Math.abs(y - prev) / 120)}` }, { scale: '1.04 .9' }, { scale: '1 1' }], { duration: 620, easing: 'ease-out' });
-        ind._y = y;
-      }
-    }
-    function jump(y) { wheeling = false; target = pos = y; sv = 0; over = 0; view.scrollTop = y; }
-    return { reveal, counters, nav, magnet, jump };
-  })();
 
   // ---------- views ----------
   const PRICE = { paid: ['Paid', 'Costs money. You get the official trial, then buy it from the developer.'], sub: ['Subscription', 'Needs a paid subscription from the developer.'] };
   function priceHTML(it) { const p = PRICE[it.price]; return p ? `<span class="pill price ${it.price}" title="${esc(p[1])}">${I.tag}${p[0]}</span>` : ''; }
   const freeFilter = (list) => (S.freeOnly ? list.filter(it => !it.price) : list);
-  function freeToggle() { return `<button class="chip tog${S.freeOnly ? ' on' : ''}" data-free>${I.tag}Free apps only</button>`; }
-  function packCardHTML(p, i) {
-    const icons = p.items.slice(0, 4).map(iconHTML).join('');
-    return `<div class="pack clickable" data-pack="${esc(p.id)}" style="--h:${p.hue};--d:${i * 60}ms"><div class="pack-ic">${icons}</div><div class="pack-t">${esc(p.name)}</div><div class="pack-b">${esc(p.blurb)} · ${p.items.length} apps</div></div>`;
-  }
-  function renderPack(p) {
-    remember(p.items);
-    const todo = p.items.filter(it => !isInstalled(it) && !it.price);
-    setView(`<div class="hero pack-hero" style="--h:${p.hue}"><button class="btn btn-ghost" data-pack-back>${I.back} Back</button><h1>${esc(p.name)}</h1><p>${esc(p.blurb)}. ${p.items.length} apps, one click.</p>
-      <div style="margin-top:16px"><button class="btn btn-solid big" data-pack-all="${esc(p.id)}"${todo.length ? '' : ' disabled'}>${I.dl} ${todo.length ? `Get all ${todo.length}` : 'All installed'}</button></div></div>
-      <div class="grid">${p.items.map(cardHTML).join('')}</div>`);
-  }
+  const freeToggle = () => `<button class="chip tog${S.freeOnly ? ' on' : ''}" data-free>${I.tag}Free apps only</button>`;
   function cardHTML(it, i) {
     remember([it]);
-    const d = Math.min(i, 18) * 22;
-    return `<div class="card clickable" data-open="${esc(it.id)}" style="animation-delay:${d}ms">
-      ${iconHTML(it)}
-      <div class="meta"><div class="name">${esc(it.name)}</div><div class="desc">${esc(subLine(it))}</div>
-      <div class="row"><span class="ver">${esc(verLabel(it))}</span>${it.label ? `<span class="pill kindp">${esc(it.label)}</span>` : ''}${priceHTML(it)}${actionHTML(it)}</div></div></div>`;
+    const tags = `${it.label ? `<span class="pill">${esc(it.label)}</span>` : ''}${priceHTML(it)}`;
+    return `<div class="card" data-open="${esc(it.id)}" style="--i:${i};--hc:${hueColor(it.id || it.name)}">
+      <div class="c-top">${iconHTML(it)}${tags ? `<div class="c-tags">${tags}</div>` : ''}</div>
+      <div><div class="c-name">${esc(it.name)}</div><div class="c-desc">${esc(subLine(it))}</div></div>
+      <div class="c-foot"><span class="ver">${esc(verLabel(it))}</span>${actionHTML(it)}</div></div>`;
   }
   function rowHTML(it, i, right) {
     remember([it]);
-    return `<div class="rowi clickable" data-open="${esc(it.id)}" style="animation-delay:${Math.min(i, 20) * 18}ms">${iconHTML(it)}
-      <div style="min-width:0"><div class="name">${esc(it.name)}</div><div class="desc">${right.sub}</div></div>
-      <div class="acts">${right.acts}</div></div>`;
+    return `<div class="rowi" data-open="${esc(it.id)}" style="--i:${i}">${iconHTML(it)}<div class="r-main"><div class="name">${esc(it.name)}</div><div class="desc">${right.sub}</div></div><div class="acts">${right.acts}</div></div>`;
   }
-  function setView(html) {
-    view.innerHTML = `<div class="view-in">${html}</div>`; hydrateIcons(view); fluid.reveal(view); fluid.counters(view);
-    // each column of cards rides the scroll wave a little later than the one before it
-    for (const g of $$('.grid, .packs, .list', view)) {
-      const kids = [...g.children]; if (!kids.length) continue;
-      const top0 = kids[0].offsetTop; let cols = kids.findIndex(k => k.offsetTop !== top0); if (cols < 1) cols = g.classList.contains('list') ? 1 : kids.length;
-      kids.forEach((k, i) => { k.style.setProperty('--lag', g.classList.contains('list') ? (0.5 + (i % 3) * 0.25).toFixed(2) : (0.35 + (i % cols) * 0.3).toFixed(2)); k.style.setProperty('--i', i); });
-    }
-    if (navDir && !REDUCE) { const vi = view.firstElementChild; vi.style.animation = 'none'; vi.animate([{ transform: `translateX(${navDir * 90 * Math.min(1.3, MK)}px) skewX(${navDir * -7}deg) scaleX(1.06)`, opacity: 0, filter: 'blur(8px)' }, { transform: 'none', opacity: 1, filter: 'none' }], { duration: SP.bouncy.ms, easing: SP.bouncy.css }); navDir = 0; }
+  function packCardHTML(p, i) {
+    return `<div class="pack" data-pack="${esc(p.id)}" style="--h:${Number(p.hue) || 0};--i:${i}"><span class="pack-n">${plural(p.items.length, 'app')}</span><div class="pack-ic">${p.items.slice(0, 4).map(iconHTML).join('')}</div><div class="pack-t">${esc(p.name)}</div><div class="pack-b">${esc(p.blurb)}</div></div>`;
   }
-  let navDir = 0;
+  function emptyHTML({ glyph, title, text, acts = '', orb }) {
+    return `<div class="empty"><span class="e-art" aria-hidden="true">${glyph}</span><div class="e-orb">${orb || glyph}</div><div class="e-title">${title}</div><div class="e-tx">${text}</div>${acts ? `<div class="e-acts">${acts}</div>` : ''}</div>`;
+  }
+  const loadingHTML = (t = 'Loading the app catalog', sub = 'The first launch takes a few seconds.') => emptyHTML({ glyph: GLYPH.box, orb: '<div class="spinner"></div>', title: esc(t), text: esc(sub) });
+  const offlineHTML = () => emptyHTML({ glyph: GLYPH.offline, orb: I.offline, title: "Can't reach the catalog", text: esc(S.cat.error || 'Check your internet connection, then try again.'), acts: '<button class="btn btn-solid big" data-retry-cat>Try again</button>' });
+
+  let lastKey = '';
+  function setView(html, key) {
+    const fresh = key !== lastKey; lastKey = key;
+    const keep = fresh ? 0 : view.scrollTop;
+    const filt = document.activeElement && document.activeElement.id === 'inst-filter' ? document.activeElement.selectionStart : -1;
+    view.innerHTML = `<div class="view-in${fresh ? '' : ' still'}">${html}</div>`;
+    const vi = view.firstElementChild;
+    [...vi.children].forEach((c, i) => c.style.setProperty('--n', Math.min(i, 8)));
+    if (!fresh) { for (const h of $$('.hero.enter', vi)) h.classList.remove('enter'); view.scrollTop = keep; }
+    else view.scrollTop = 0;
+    hydrateIcons(view); watchHeroes(view);
+    if (filt >= 0) { const f = $('#inst-filter'); if (f) { f.focus(); try { f.setSelectionRange(filt, filt); } catch {} } }
+  }
   const VIEWS = ['discover', 'updates', 'installed', 'downloads', 'saved', 'settings'];
 
   function wingetNote() {
     if (isMac() || S.info.winget !== false) return '';
-    return `<div class="note"><div><b>One-time setup:</b> Grab installs apps through Microsoft's winget, which is part of "App Installer". Get it from the Microsoft Store, then reopen Grab.</div><button class="btn btn-solid" data-ext="https://apps.microsoft.com/detail/9NBLGGH4NNS1">Get App Installer</button></div>`;
+    return `<div class="note"><span class="ni2">${I.box}</span><div><b>One-time setup:</b> Grab installs apps through Microsoft's winget, which is part of "App Installer". Get it from the Microsoft Store, then reopen Grab.</div><button class="btn btn-solid" data-ext="https://apps.microsoft.com/detail/9NBLGGH4NNS1">Get App Installer</button></div>`;
   }
 
   function renderDiscover() {
@@ -459,123 +268,169 @@
     if (/^https?:\/\/\S+$/i.test(q)) {
       let host = '', file = '';
       try { const u = new URL(q); host = u.hostname; file = decodeURIComponent(u.pathname.split('/').pop() || ''); } catch {}
-      setView(`${wingetNote()}<div class="urlcard"><div class="ic" style="background:rgba(255,255,255,.08)">${I.link}</div><div class="meta"><div class="t">Download from this link</div><div class="u">${esc(file || host)} · ${esc(host)}</div></div><button class="btn btn-solid big" data-url="${esc(q)}">${I.dl} Download${isMac() ? ' &amp; install' : ''}</button></div>
-        <div class="sub" style="color:var(--faint);font-size:12.5px">${isMac() ? 'Disk images, zips and installer packages get installed into Applications automatically. Anything else is saved to Downloads.' : 'Installers (.exe / .msi) open as soon as they finish downloading. Anything else is saved to Downloads.'}</div>`);
+      setView(`${wingetNote()}<div class="sec-h"><h2>Paste a link</h2><span class="sub">Straight from the source, no browser</span></div>
+        <div class="urlcard"><div class="ic glyph">${I.link}</div><div class="r-main"><div class="t">Download from this link</div><div class="u">${esc(file || host)} · ${esc(host)}</div></div><button class="btn btn-solid big" data-url="${esc(q)}">${I.dl}Download${isMac() ? ' and install' : ''}</button></div>
+        <p class="hint">${isMac() ? 'Disk images, zips and installer packages get installed into Applications automatically. Anything else is saved to Downloads.' : 'Installers (.exe and .msi) open as soon as they finish downloading. Anything else is saved to Downloads.'}</p>`, 'url');
       return;
     }
     if (q) {
-      if (!S.cat.ready) { setView(loadingHTML()); return; }
+      if (S.cat.error && !S.cat.ready) { setView(offlineHTML(), 'q-off'); return; }
+      if (!S.cat.ready) { setView(loadingHTML(), 'q-load'); return; }
+      const key = 'q|' + S.resultsQ;
       const shown = freeFilter(S.results);
-      if (S.results.length && !shown.length) { setView(`<div class="h2"><h2>Results</h2>${freeToggle()}</div><div class="empty">${I.tag}<div class="big">Only paid apps match "${esc(q)}"</div><div>Turn off "Free apps only" to see them.</div></div>`); return; }
-      if (!S.results.length) { setView(`<div class="empty">${I.search}<div class="big">Nothing called "${esc(q)}"</div><div>Try another name, or paste a direct download link.</div></div>`); return; }
-      setView(`<div class="h2"><h2>Results <span class="sub">${S.results.length >= 60 ? 'top 60' : shown.length} for "${esc(q)}"</span></h2>${freeToggle()}</div><div class="grid">${shown.map(cardHTML).join('')}</div>`);
+      if (S.results.length && !shown.length) { setView(`<div class="sec-h"><h2>Results</h2><span class="sp"></span>${freeToggle()}</div>${emptyHTML({ glyph: I.tag, title: `Only paid apps match "${esc(q)}"`, text: 'Turn off Free apps only to see them.' })}`, key); return; }
+      if (!S.results.length) { setView(emptyHTML({ glyph: GLYPH.search, orb: I.search, title: `Nothing called "${esc(q)}"`, text: 'Try another name, or paste a direct download link.' }), key); return; }
+      setView(`<div class="sec-h"><h2>Results</h2><span class="sub">${S.results.length >= 60 ? 'Top 60' : shown.length} for "${esc(q)}"</span><span class="sp"></span>${freeToggle()}</div><div class="grid">${shown.map(cardHTML).join('')}</div>`, key);
       return;
     }
-    const hero = `<div class="hero"><h1>${['Get', 'any', 'app.'].map((w, i) => `<span class="w" style="--i:${i}">${[...w].map(c => `<i class="l">${c}</i>`).join('')}</span> `).join('')}<span class="g w" style="--i:3">One click.</span></h1><p>Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.</p>
-      <div class="chips"><span class="chip">${I.shield}${isMac() ? 'Checksums verified' : 'Hash-checked by winget'}</span><span class="chip">${I.bolt}No browser, no fake buttons</span><span class="chip">${I.box}${S.cat.ready ? `<b data-count="${S.cat.count}">0</b>&nbsp;apps` : 'Thousands of apps'}</span></div></div>`;
-    if (S.cat.error) { setView(hero + `<div class="empty">${I.globe}<div class="big">Can't reach the catalog</div><div>${esc(S.cat.error)}</div><div style="margin-top:14px"><button class="btn btn-solid" data-retry-cat>Try again</button></div></div>`); return; }
-    if (!S.cat.ready) { setView(hero + wingetNote() + `<div class="h2"><h2>Popular</h2></div><div class="grid">${'<div class="skel"></div>'.repeat(12)}</div>`); return; }
+    const n = S.cat.ready ? S.cat.count.toLocaleString() : '';
+    const top = hero({ ic: 'var(--accent)', glyph: GLYPH.grab, icon: MARK, eye: 'Discover', chip: n ? `${n} apps` : '', seed: 'discover',
+      title: 'Get any app.<br>One click.', lead: `Search, hit Get, done. Every download comes straight from the official source${isMac() ? ' and lands in Applications' : ' and installs silently'}.`,
+      extra: `<div class="hero-chips"><span class="hchip">${I.shield}${isMac() ? 'Checksums verified' : 'Hash-checked by winget'}</span><span class="hchip">${I.bolt}No browser, no fake buttons</span><span class="hchip">${I.box}${n ? `<b>${n}</b>&nbsp;apps` : 'Thousands of apps'}</span></div>` });
+    if (S.cat.error && !S.cat.ready) { setView(top + offlineHTML(), 'home-off'); return; }
+    if (!S.cat.ready) { setView(top + wingetNote() + `<div class="sec-h"><h2>Popular</h2></div><div class="grid">${'<div class="skel"></div>'.repeat(8)}</div>`, 'home-load'); return; }
     if (S.pack) { const p = S.packs.find(x => x.id === S.pack); if (p) return renderPack(p); S.pack = null; }
-    const packs = S.packs.length ? `<div class="h2"><h2>Starter packs</h2><span class="sub">A whole setup in one click</span></div><div class="packs">${S.packs.map(packCardHTML).join('')}</div>` : '';
-    const rc = recents(), rec = rc.length ? `<div class="h2"><h2>Recent searches</h2><button class="btn btn-ghost" data-recent-clear>Clear</button></div><div class="chips">${rc.map(x => `<button class="chip" data-recent="${esc(x)}">${I.search}${esc(x)}</button>`).join('')}</div>` : '';
-    setView(hero + wingetNote() + rec + packs + `<div class="h2"><h2>Popular</h2>${freeToggle()}</div><div class="grid">${freeFilter(S.cat.popular).map(cardHTML).join('')}</div>`);
+    const rc = recents();
+    const rec = rc.length ? `<div class="sec-h"><h2>Recent searches</h2><span class="sp"></span><button class="btn btn-ghost small" data-recent-clear>Clear</button></div><div class="chips">${rc.map(x => `<button class="chip" data-recent="${esc(x)}">${I.search}${esc(x)}</button>`).join('')}</div>` : '';
+    const packs = S.packs.length ? `<div class="sec-h"><h2>Starter packs</h2><span class="sub">A whole setup in one click</span></div><div class="packs">${S.packs.map(packCardHTML).join('')}</div>` : '';
+    setView(top + wingetNote() + rec + packs + `<div class="sec-h"><h2>Popular</h2><span class="sub">What everyone grabs first</span><span class="sp"></span>${freeToggle()}</div><div class="grid">${freeFilter(S.cat.popular).map(cardHTML).join('')}</div>`, 'home');
   }
-  function loadingHTML(t = 'Loading the app catalog') { return `<div class="empty"><div class="spinner"></div><div class="big">${esc(t)}</div><div>First launch takes a few seconds.</div></div>`; }
+  function renderPack(p) {
+    remember(p.items);
+    const todo = p.items.filter(grabbable);
+    setView(hero({ ic: `hsl(${Number(p.hue) || 0} 78% 56%)`, glyph: GLYPH.box, icon: I.box, eye: 'Starter pack', chip: plural(p.items.length, 'app'), seed: p.id, back: true,
+      title: esc(p.name), lead: `${esc(p.blurb)}. Every app straight from its developer, in one click.`,
+      extra: `<div class="hero-acts"><button class="btn btn-solid big" data-pack-all="${esc(p.id)}"${todo.length && !S.busy.has('pack:' + p.id) ? '' : ' disabled'}>${I.dl}${todo.length ? `Get all ${todo.length}` : 'All installed'}</button></div>` })
+      + `<div class="sec-h"><h2>In this pack</h2></div><div class="grid">${p.items.map(cardHTML).join('')}</div>`, 'pack|' + p.id);
+  }
 
+  function scanGate(title, ic, glyph, icon) {
+    if (S.scan) return '';
+    const top = hero({ ic, glyph, icon, eye: 'Your apps', title, seed: title });
+    if (S.cat.error && !S.cat.ready) return top + offlineHTML();
+    return top + loadingHTML('Checking your apps', 'Grab compares what you have with the latest official versions.');
+  }
   function renderUpdates() {
-    if (!S.scan) { setView(loadingHTML('Checking your apps')); return; }
+    const gate = scanGate('Updates', SEC.updates, GLYPH.up, I.up); if (gate) { setView(gate, 'updates-wait'); return; }
     const ups = S.scan.filter(s => s.update);
-    if (!ups.length) { setView(`<div class="hero"><h1>Updates</h1></div><div class="empty">${I.check}<div class="big">You're all up to date</div><div>Grab checks your apps against the latest official versions.</div><div style="margin-top:14px"><button class="btn" data-rescan>Check again</button></div></div>`); return; }
-    setView(`<div class="hero"><h1>Updates</h1><p>${ups.length} app${ups.length > 1 ? 's have' : ' has'} a newer version.</p></div>
-      <div class="h2"><h2>Available</h2><button class="btn btn-solid" data-update-all>${I.up} Update all</button></div>
-      <div class="list">${ups.map((s, i) => rowHTML(s, i, { sub: `${esc(s.installedVer || 'installed')} <span style="color:var(--faint)">&rarr;</span> <b style="color:#c9bfff">${esc(s.latest || '')}</b>`, acts: actionHTML(s) })).join('')}</div>`);
+    const top = hero({ ic: SEC.updates, glyph: GLYPH.up, icon: I.up, eye: 'Your apps', chip: ups.length ? plural(ups.length, 'update') : 'All good', seed: 'updates', title: 'Updates',
+      lead: ups.length ? `${ups.length === 1 ? 'One app has' : ups.length + ' apps have'} a newer official version. Update one, or all of them at once.` : 'Grab checks your apps against the latest official versions.',
+      extra: `<div class="hero-acts">${ups.length ? `<button class="btn btn-solid big" data-update-all${S.busy.has('upall') ? ' disabled' : ''}>${I.up}Update all</button>` : ''}<button class="btn onink big" data-rescan>Check again</button></div>` });
+    if (!ups.length) { setView(top + emptyHTML({ glyph: GLYPH.up, orb: I.check, title: "You're all up to date", text: `${plural(S.scan.length, 'app')} checked. When a developer ships a new version, it shows up here.` }), 'updates'); return; }
+    setView(top + `<div class="sec-h"><h2>Available</h2><span class="sub">${plural(ups.length, 'app')}</span></div><div class="list">${ups.map((s, i) => rowHTML(s, i, { sub: `<span class="vfrom">${esc(s.installedVer || 'Installed')}</span>${I.arrow}<span class="vto">${esc(s.latest || '')}</span>`, acts: actionHTML(s) })).join('')}</div>`, 'updates');
   }
 
   function renderInstalled() {
-    if (!S.scan) { setView(loadingHTML('Checking your apps')); return; }
+    const gate = scanGate('Installed', SEC.installed, GLYPH.grid, I.grid); if (gate) { setView(gate, 'installed-wait'); return; }
     const list = S.scan.filter(s => !S.removed.has(s.id));
-    if (!list.length) { setView(`<div class="hero"><h1>Installed</h1></div><div class="empty">${I.box}<div class="big">No matching apps yet</div><div>Apps you grab show up here.</div></div>`); return; }
-    setView(`<div class="hero"><h1>Installed</h1><p>${list.length} app${list.length > 1 ? 's' : ''} Grab can keep updated.</p></div>
-      <div class="h2"><input class="filt" id="inst-filter" placeholder="Filter installed apps" autocomplete="off" spellcheck="false"></div>
-      <div class="list">${list.map((s, i) => rowHTML(s, i, {
-        sub: `${esc(s.installedVer ? 'v' + s.installedVer : '')}${s.update ? ' <span class="pill up">Update</span>' : ''}`,
-        acts: `${actionHTML(s)}<button class="btn btn-ghost" data-remove="${esc(s.id)}" title="${isMac() ? 'Move to Trash' : 'Uninstall'}">${I.trash}</button>`,
-      })).join('')}</div>`);
+    const ups = list.filter(s => s.update).length;
+    const top = hero({ ic: SEC.installed, glyph: GLYPH.grid, icon: I.grid, eye: 'Your apps', chip: list.length ? plural(list.length, 'app') : '', seed: 'installed', title: 'Installed',
+      lead: list.length ? `${list.length === 1 ? 'One app' : list.length + ' apps'} on this ${isMac() ? 'Mac' : 'PC'} that Grab can keep up to date.` : 'Apps you grab show up here.' });
+    if (!list.length) { setView(top + emptyHTML({ glyph: GLYPH.grid, orb: I.grid, title: 'No matching apps yet', text: 'Apps you grab, and apps from the catalog that you already have, show up here.', acts: '<button class="btn btn-solid big" data-go="discover">Find apps</button>' }), 'installed'); return; }
+    const glance = `<div class="glance"><div class="stat" style="--ic:#8b5cf6"><span class="si">${I.grid}</span><div><b>${list.length}</b><span>Installed apps Grab knows</span></div></div><div class="stat" style="--ic:#12b886"><span class="si">${I.up}</span><div><b>${ups}</b><span>${ups === 1 ? 'Update' : 'Updates'} waiting</span></div></div><div class="stat" style="--ic:#ec4899"><span class="si">${heart(false)}</span><div><b>${S.saved.size}</b><span>Saved for later</span></div></div></div>`;
+    setView(top + glance + `<div class="sec-h"><h2>Your apps</h2><span class="sp"></span><input class="filt" id="inst-filter" placeholder="Filter installed apps" autocomplete="off" spellcheck="false" value="${esc(S.instFilter)}"></div>
+      <div class="list" id="inst-list">${list.map((s, i) => rowHTML(s, i, {
+        sub: `${s.installedVer ? `<span>v${esc(s.installedVer)}</span>` : ''}${s.update ? ' <span class="pill up">Update</span>' : ''}`,
+        acts: `${actionHTML(s)}<button class="btn btn-ghost icon" data-remove="${esc(s.id)}" title="${isMac() ? 'Move to Trash' : 'Uninstall'}">${I.trash}</button>`,
+      })).join('')}</div>`, 'installed');
+    applyInstFilter();
   }
+  function applyInstFilter() {
+    const v = S.instFilter.trim().toLowerCase();
+    $$('#inst-list .rowi').forEach(r => { r.hidden = !!v && !(($('.name', r) || {}).textContent || '').toLowerCase().includes(v); });
+  }
+  document.addEventListener('input', (e) => { if (e.target.id === 'inst-filter') { S.instFilter = e.target.value; applyInstFilter(); } });
 
-  document.addEventListener('input', (e) => {
-    if (e.target.id !== 'inst-filter') return;
-    const v = e.target.value.trim().toLowerCase();
-    $$('.list .rowi').forEach(r => { r.hidden = !!v && !(r.querySelector('.name')?.textContent || '').toLowerCase().includes(v); });
-  });
   function dlRowInner(j) {
     const it = S.items.get(j.itemId) || { id: j.itemId, name: j.name, home: j.home };
-    const active = ['queued', 'downloading', 'installing'].includes(j.state);
+    const active = ACTIVE.includes(j.state);
     let st = '';
-    if (j.state === 'queued') st = 'Waiting';
+    if (j.state === 'queued') st = 'Waiting for the one before it';
     else if (j.state === 'downloading') st = j.total ? `${fmtBytes(j.received)} of ${fmtBytes(j.total)}${j.speed ? ' · ' + fmtBytes(j.speed) + '/s' : ''}` : (j.received ? fmtBytes(j.received) : (j.stage || 'Starting')) + (j.pct && !j.total ? ` · ${Math.round(j.pct)}%` : '');
     else if (j.state === 'installing') st = j.stage || 'Installing';
     else if (j.state === 'needs-quit') st = `${j.msg}. Quit it to finish installing.`;
     else st = j.msg || j.state;
     const indet = active && !(j.state === 'downloading' && (j.total || j.pct));
     let acts = '';
-    if (active) acts = `<button class="btn btn-ghost" data-cancel="${j.id}">Cancel</button>`;
-    else if (j.state === 'needs-quit') acts = `<button class="btn btn-warn" data-resume="${j.id}">Quit &amp; install</button><button class="btn btn-ghost" data-cancel="${j.id}">Cancel</button>`;
-    else if (j.state === 'done') acts = `${j.path && isMac() && j.result === 'installed' ? `<button class="btn btn-ok" data-openpath="${esc(j.path)}">Open</button>` : ''}${j.path && j.result !== 'installed' ? `<button class="btn" data-reveal="${esc(j.path)}">Show</button>` : ''}<button class="btn btn-ghost" data-dismiss="${j.id}">${I.x}</button>`;
-    else if (j.state === 'error') acts = `${String(j.itemId).startsWith('url:') ? '' : `<button class="btn btn-bad" data-act="${esc(j.itemId)}" data-do="${j.verb === 'update' ? 'update' : 'get'}">Retry</button>`}<button class="btn btn-ghost" data-dismiss="${j.id}">${I.x}</button>`;
-    else acts = `<button class="btn btn-ghost" data-dismiss="${j.id}">${I.x}</button>`;
-    const pct = j.state === 'installing' || j.state === 'done' ? 100 : Math.round(j.pct || 0);
-    return { cls: `dl${indet ? ' indet' : ''}${j.state === 'error' ? ' err' : ''}${j.state === 'done' ? ' ok' : ''}`, html: `${iconHTML(it)}<div style="min-width:0"><div class="name" style="font-weight:650">${esc(j.verb === 'uninstall' ? 'Removing ' : j.verb === 'update' ? 'Updating ' : '')}${esc(it.name || j.name)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="st">${esc(st)}</div></div><div class="acts" style="display:flex;gap:8px">${acts}</div>` };
+    if (j.state === 'queued' || j.state === 'downloading') acts = `<button class="btn btn-ghost" data-cancel="${j.id}">Cancel</button>`;
+    else if (j.state === 'needs-quit') acts = `<button class="btn btn-warn" data-resume="${j.id}">Quit and install</button><button class="btn btn-ghost" data-cancel="${j.id}">Cancel</button>`;
+    else if (j.state === 'done') acts = `${j.path && isMac() && j.result === 'installed' ? `<button class="btn btn-ok" data-openpath="${esc(j.path)}">Open</button>` : ''}${j.path && j.result !== 'installed' ? `<button class="btn" data-reveal="${esc(j.path)}">Show</button>` : ''}<button class="btn btn-ghost icon" data-dismiss="${j.id}" title="Remove from the list">${I.x}</button>`;
+    else if (j.state === 'error') acts = `${String(j.itemId).startsWith('url:') ? '' : `<button class="btn btn-bad" data-act="${esc(j.itemId)}" data-do="${j.verb === 'update' ? 'update' : 'get'}">${I.up}Retry</button>`}<button class="btn btn-ghost icon" data-dismiss="${j.id}" title="Remove from the list">${I.x}</button>`;
+    else if (!active) acts = `<button class="btn btn-ghost icon" data-dismiss="${j.id}" title="Remove from the list">${I.x}</button>`;
+    const pct = j.state === 'installing' || j.state === 'done' ? 100 : j.state === 'error' || j.state === 'canceled' ? Math.max(8, Math.round(j.pct || 0)) : Math.round(j.pct || 0);
+    const verb = j.verb === 'uninstall' ? 'Removing ' : j.verb === 'update' ? 'Updating ' : '';
+    return { cls: `dl${indet ? ' indet' : ''}${j.state === 'error' ? ' err' : ''}${j.state === 'done' ? ' ok' : ''}${j.state === 'canceled' ? ' cx' : ''}`,
+      html: `<span class="icw">${iconHTML(it)}<i class="state">${j.state === 'error' ? I.x : I.check}</i></span><div class="r-main"><div class="name">${esc(verb)}${esc(it.name || j.name)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="st">${esc(st)}</div></div><div class="acts">${acts}</div>` };
   }
   function renderDownloads() {
     const list = [...S.jobsById.values()].sort((a, b) => b.created - a.created);
-    if (!list.length) { setView(`<div class="hero"><h1>Downloads</h1></div><div class="empty">${I.dl}<div class="big">Nothing downloading</div><div>Hit Get on any app and it shows up here.</div></div>`); return; }
-    setView(`<div class="hero"><h1>Downloads</h1></div>${list.some(j => ['done', 'error', 'canceled'].includes(j.state)) ? `<div class="h2"><h2></h2><button class="btn btn-ghost" data-clear-done>Clear finished</button></div>` : ''}<div class="list">${list.map((j, i) => { const r = dlRowInner(j); return `<div class="${r.cls}" data-dl="${j.id}" style="animation-delay:${i * 25}ms">${r.html}</div>`; }).join('')}</div>`);
+    const live = list.filter(j => ACTIVE.includes(j.state) || j.state === 'needs-quit').length;
+    const fin = list.some(j => ['done', 'error', 'canceled'].includes(j.state));
+    const top = hero({ ic: SEC.downloads, glyph: GLYPH.dl, icon: I.dl, eye: 'Activity', chip: live ? `${live} in progress` : list.length ? 'All done' : '', seed: 'downloads', title: 'Downloads',
+      lead: 'Everything you grab, as it downloads, gets checked and installs. One at a time, so nothing fights over your disk.',
+      extra: fin ? '<div class="hero-acts"><button class="btn onink big" data-clear-done>Clear finished</button></div>' : '' });
+    if (!list.length) { setView(top + emptyHTML({ glyph: GLYPH.dl, orb: I.dl, title: 'Nothing downloading', text: 'Hit Get on any app and it shows up here, with its progress.', acts: '<button class="btn btn-solid big" data-go="discover">Find apps</button>' }), 'downloads'); return; }
+    setView(top + `<div class="list" id="dl-list">${list.map((j, i) => { const r = dlRowInner(j); return `<div class="${r.cls}" data-dl="${j.id}" style="--i:${i}">${r.html}</div>`; }).join('')}</div>`, 'downloads');
   }
   function patchDownloadRow(j) {
     const row = $(`[data-dl="${j.id}"]`);
     if (!row) { renderDownloads(); return; }
     const r = dlRowInner(j);
+    const was = row.className;
     row.className = r.cls;
-    const bar = $('.bar i', row), st = $('.st', row);
     const tmp = document.createElement('div'); tmp.innerHTML = r.html;
-    bar.style.width = $('.bar i', tmp).style.width;
-    st.textContent = $('.st', tmp).textContent;
+    $('.bar i', row).style.width = $('.bar i', tmp).style.width;
+    $('.st', row).textContent = $('.st', tmp).textContent;
+    $('.state', row).innerHTML = $('.state', tmp).innerHTML;
     const acts = $('.acts', row), nacts = $('.acts', tmp);
     if (acts.innerHTML !== nacts.innerHTML) acts.innerHTML = nacts.innerHTML;
+    if (was !== row.className && /\b(ok|err)\b/.test(row.className)) kick($('.icw', row), 0.8, 0.6);
+    // the hero's counter and Clear finished follow along
+    const live = [...S.jobsById.values()].filter(x => ACTIVE.includes(x.state) || x.state === 'needs-quit').length;
+    const chip = $('.hero .hero-eye b'); if (chip) chip.textContent = live ? `${live} in progress` : 'All done';
+    if (!$('[data-clear-done]') && ['done', 'error', 'canceled'].includes(j.state)) { const tx = $('.hero .hero-tx'); if (tx) tx.insertAdjacentHTML('beforeend', '<div class="hero-acts"><button class="btn onink big" data-clear-done>Clear finished</button></div>'); }
   }
 
   // ---------- saved apps + settings ----------
-  const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
   S.saved = new Set(store.get('grab-saved', []));
   S.savedItems = null;
-  const heart = (on) => `<svg viewBox="0 0 24 24" style="${on ? 'fill:#f472b6;stroke:#f472b6' : ''}"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>`;
-  function saveBtn(id) { const on = S.saved.has(id); return `<button class="btn big${on ? ' saved-on' : ''}" data-save="${esc(id)}">${heart(on)} ${on ? 'Saved' : 'Save'}</button>`; }
+  const saveBtn = (id) => { const on = S.saved.has(id); return `<button class="btn big${on ? ' saved-on' : ''}" data-save="${esc(id)}">${heart(false)}${on ? 'Saved' : 'Save'}</button>`; };
+  let savedSeq = 0;
   async function renderSaved() {
-    if (!S.saved.size) { setView(`<div class="hero"><h1>Saved</h1></div><div class="empty">${heart(false)}<div class="big">Nothing saved yet</div><div>Open any app and hit Save to keep it here for later.</div></div>`); return; }
-    if (!S.savedItems) { setView(loadingHTML('Loading your saved apps')); S.savedItems = remember(await G.getMany([...S.saved])); if (S.view !== 'saved') return; }
+    const top = (n, extra = '') => hero({ ic: SEC.saved, glyph: GLYPH.heart, icon: heart(false), eye: 'For later', chip: n ? plural(n, 'app') : '', seed: 'saved', title: 'Saved', lead: 'Apps you want to grab later. Open any app and hit Save to keep it here.', extra });
+    if (!S.saved.size) { setView(top(0) + emptyHTML({ glyph: GLYPH.heart, orb: heart(false), title: 'Nothing saved yet', text: 'Open any app and hit Save to keep it here for later.', acts: '<button class="btn btn-solid big" data-go="discover">Find apps</button>' }), 'saved'); return; }
+    if (!S.savedItems) {
+      const my = ++savedSeq;
+      setView(top(S.saved.size) + loadingHTML('Loading your saved apps', 'One moment.'), 'saved');
+      try { S.savedItems = remember(await G.getMany([...S.saved])); } catch { S.savedItems = null; }
+      if (my !== savedSeq || S.view !== 'saved') return;
+      if (!S.savedItems) { setView(top(S.saved.size) + emptyHTML({ glyph: GLYPH.heart, orb: I.offline, title: "Couldn't load your saved apps", text: 'Try again in a moment.', acts: '<button class="btn btn-solid big" data-go="saved">Try again</button>' }), 'saved'); return; }
+    }
     const list = S.savedItems.filter(it => S.saved.has(it.id));
-    const todo = list.filter(it => !isInstalled(it) && !it.price);
-    setView(`<div class="hero"><h1>Saved</h1><p>${list.length} app${list.length === 1 ? '' : 's'} you want to grab later.</p></div>
-      <div class="h2"><h2></h2><button class="btn btn-solid" data-saved-all${todo.length ? '' : ' disabled'}>${I.dl} ${todo.length ? `Get all ${todo.length}` : 'All installed'}</button></div>
-      <div class="grid">${list.map(cardHTML).join('')}</div>`);
+    if (!list.length) { setView(top(S.saved.size) + (S.cat.ready ? emptyHTML({ glyph: GLYPH.heart, orb: heart(false), title: 'Saved apps are not in the catalog', text: 'They may have been renamed or removed by their developer.' }) : loadingHTML()), 'saved'); return; }
+    const todo = list.filter(grabbable);
+    setView(top(list.length, `<div class="hero-acts"><button class="btn btn-solid big" data-saved-all${todo.length && !S.busy.has('saved') ? '' : ' disabled'}>${I.dl}${todo.length ? `Get all ${todo.length}` : 'All installed'}</button></div>`)
+      + `<div class="sec-h"><h2>Your list</h2><span class="sub">${plural(list.length, 'app')}</span></div><div class="grid">${list.map(cardHTML).join('')}</div>`, 'saved');
   }
-  const THEMES = { violet: ['#7C5CFF', '#4F7BFF', '#22D3EE'], sunset: ['#FF5C8A', '#FF8A4F', '#FBBF24'], mint: ['#10B981', '#22D3EE', '#4F7BFF'], candy: ['#F472B6', '#A855F7', '#60A5FA'], lime: ['#84CC16', '#22C55E', '#14B8A6'] };
-  function applyTheme(name) { const t = THEMES[name] || THEMES.violet; ['--a1', '--a2', '--a3'].forEach((k, i) => RS.setProperty(k, t[i])); store.set('grab-theme', name); S.theme = name; }
-  applyTheme(store.get('grab-theme', 'violet'));
   function renderSettings() {
-    const mod = isMac() ? '⌘' : 'Ctrl ';
-    setView(`<div class="hero"><h1>Settings</h1></div>
-      <div class="set"><div><b>Colour</b><span>Pick the vibe for the whole app</span></div><div class="swatches">${Object.entries(THEMES).map(([k, c]) => `<button class="sw${S.theme === k ? ' on' : ''}" data-theme="${k}" title="${k}" style="background:linear-gradient(135deg,${c.join(',')})"></button>`).join('')}</div></div>
-      <div class="set"><div><b>Motion</b><span>JELLY is the wobbliest, Bouncy is the sweet spot, Chill stays calm.</span></div><div class="seg">${[['chill', 'Chill'], ['bouncy', 'Bouncy'], ['max', 'JELLY']].map(([k, n]) => `<button class="seg-b${MLEVEL === k ? ' on' : ''}" data-motion="${k}">${n}</button>`).join('')}</div></div>
-      <div class="set"><div><b>Free apps only</b><span>Hide apps Grab knows cost money</span></div>${freeToggle()}</div>
-      <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates install themselves in the background</span></div><button class="btn" data-upd-check>Check for updates</button></div>
-      <div class="set"><div><b>Shortcuts</b><span>${mod}K search · ${mod}1 to ${mod}6 switch tabs · Esc close</span></div></div>
-      <div class="set"><div><b>About prices</b><span>Grab only downloads official versions from the developer. Paid apps arrive as their normal trial, and you buy them from the developer. Only well-known paid apps are labelled, so an app with no label is not guaranteed to be free.</span></div></div>`);
+    const mod = isMac() ? '\u2318' : 'Ctrl ';
+    const seg = (attr, cur, opts) => `<div class="seg">${opts.map(([k, n]) => `<button class="seg-b${cur === k ? ' on' : ''}" data-${attr}="${k}">${n}</button>`).join('')}</div>`;
+    setView(hero({ ic: SEC.settings, glyph: GLYPH.sliders, icon: I.sliders, eye: 'Grab', chip: 'v' + esc(S.info.version || ''), seed: 'settings', title: 'Settings', lead: 'Make Grab yours: light or dark, your colour, and how lively it feels.' })
+      + `<div class="set-card"><h3>Look and feel</h3>
+        <div class="set"><div><b>Appearance</b><span>Follow your ${isMac() ? 'Mac' : 'PC'}, or pick light or dark.</span></div>${seg('appearance', S.appearance, [['system', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']])}</div>
+        <div class="set"><div><b>Colour</b><span>The accent for the whole app, from Lumen's palette.</span></div><div class="swatches">${ACCENTS.map(([n, c]) => `<button class="sw${S.accent === c ? ' on' : ''}" data-accent="${c}" title="${n}" style="--c:${c}"></button>`).join('')}</div></div>
+        <div class="set"><div><b>Motion</b><span>Jelly is Lumen's springy feel. Calm barely bounces. Off keeps everything still.</span></div>${seg('motion', S.motion, [['jelly', 'Jelly'], ['calm', 'Calm'], ['off', 'Off']])}</div></div>
+      <div class="set-card"><h3>Apps</h3>
+        <div class="set"><div><b>Free apps only</b><span>Hide apps Grab knows cost money.</span></div><button class="tg${S.freeOnly ? ' on' : ''}" data-free title="Free apps only"><i></i></button></div>
+        <div class="set"><div><b>About prices</b><span>Grab only downloads official versions from the developer. Paid apps arrive as their normal trial, and you buy them from the developer. Only well-known paid apps are labelled, so an app with no label is not guaranteed to be free.</span></div></div></div>
+      <div class="set-card"><h3>Grab</h3>
+        <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates download in the background and install when you restart.</span></div><button class="btn" data-upd-check>${I.up}Check for updates</button></div>
+        <div class="set"><div><b>Shortcuts</b><div class="kbds"><span><kbd>${mod}K</kbd> Search</span><span><kbd>/</kbd> Search</span><span><kbd>${mod}1</kbd> to <kbd>${mod}6</kbd> Switch sections</span><span><kbd>Esc</kbd> Close</span></div></div></div>
+        <div class="set"><div><b>What's new</b><span>See what changed in Grab 2.0.</span></div><button class="btn" data-whatsnew>${I.spark}What's new</button></div></div>`, 'settings');
   }
   function render() {
     $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
-    fluid.nav();
+    RS.setProperty('--sec', SEC[S.view] || 'var(--accent)');
     if (S.view === 'discover') renderDiscover();
     else if (S.view === 'updates') renderUpdates();
     else if (S.view === 'installed') renderInstalled();
@@ -583,76 +438,118 @@
     else if (S.view === 'settings') renderSettings();
     else renderDownloads();
   }
-  function go(v) { if (S.view === v && !S.pack) return; S.pack = null; navDir = Math.sign(VIEWS.indexOf(v) - VIEWS.indexOf(S.view)) || 1; S.view = v; fluid.jump(0); render(); }
+  function go(v) { if (!VIEWS.includes(v)) return; if (S.view === v && !S.pack) return; S.pack = null; S.view = v; render(); }
 
   function badges() {
-    const nUp = S.scan ? S.scan.filter(s => s.update && !(S.jobsByItem.get(s.id) && S.jobsByItem.get(s.id).state === 'done')).length : 0;
-    const bu = $('#badge-updates'); if (bu.textContent !== String(nUp) && nUp) jelly(bu, 2); bu.textContent = nUp; bu.classList.toggle('show', nUp > 0);
-    const nDl = [...S.jobsById.values()].filter(j => ['queued', 'downloading', 'installing', 'needs-quit'].includes(j.state)).length;
-    const bs = $('#badge-saved'); if (bs) { const n = S.saved ? S.saved.size : 0; bs.textContent = n; bs.classList.toggle('show', n > 0); }
-    const bd = $('#badge-downloads'); if (bd.textContent !== String(nDl) && nDl) jelly(bd, 2); bd.textContent = nDl; bd.classList.toggle('show', nDl > 0);
+    const setB = (el, n) => { if (!el) return; const was = el.textContent; el.textContent = n; el.classList.toggle('show', n > 0); if (n > 0 && was !== String(n)) kick(el, 0.9, 0.6); };
+    setB($('#badge-updates'), S.scan ? S.scan.filter(s => s.update && !(S.jobsByItem.get(s.id) && S.jobsByItem.get(s.id).state === 'done')).length : 0);
+    setB($('#badge-downloads'), [...S.jobsById.values()].filter(j => ACTIVE.includes(j.state) || j.state === 'needs-quit').length);
+    setB($('#badge-saved'), S.saved ? S.saved.size : 0);
   }
   function foot() {
     const f = $('#side-foot');
-    if (S.cat.error) f.textContent = 'Catalog offline';
+    f.classList.toggle('off', !!(S.cat.error && !S.cat.ready)); f.classList.toggle('wait', !S.cat.ready && !S.cat.error);
+    if (S.cat.error && !S.cat.ready) f.textContent = 'Catalog offline';
     else if (!S.cat.ready) f.textContent = 'Loading catalog';
     else f.textContent = `${S.cat.count.toLocaleString()} apps · v${S.info.version || ''}`;
   }
 
-  // ---------- detail sheet ----------
+  // ---------- the detail sheet ----------
+  let sheetTok = 0, sheetT = null;
   async function openSheet(id) {
+    const tok = ++sheetTok;
     let it = S.items.get(id);
-    try { const fresh = await G.get(id); if (fresh) it = remember([fresh])[0] && S.items.get(id); } catch {}
-    if (!it) return;
+    try { const fresh = await G.get(id); if (fresh) { remember([fresh]); it = S.items.get(id); } } catch {}
+    if (!it || tok !== sheetTok) return;
     const sc = S.scan && S.scan.find(s => s.id === id);
     if (sc && sc.path && !it.path) it = { ...it, path: sc.path };
     const sh = $('#sheet'), back = $('#sheet-back');
     const inst = isInstalled(it);
     const shield = isMac()
-      ? (it.verified ? `Official download from <b>${esc(it.host)}</b>. Grab checks its checksum before installing, so a tampered file gets blocked.` : `Official download from <b>${esc(it.host)}</b>, taken from Homebrew's reviewed catalog. This vendor doesn't publish a fixed checksum.`)
-      : `Installed through winget, Microsoft's package manager. The installer comes from the publisher and its hash is checked before it runs.`;
-    sh.innerHTML = `<button class="btn btn-ghost close" data-close>${I.x}</button>
-      <div class="head">${iconHTML(it)}<div style="min-width:0"><h3>${esc(it.name)}</h3><div class="pub">${esc(isMac() ? (it.host || '') : (it.publisher || ''))}</div></div></div>
-      ${isMac() && it.desc ? `<p class="about">${esc(it.desc)}</p>` : ''}
-      <div class="actions">${actionHTML(it, 'big')}${it.price && it.trial ? `<button class="btn btn-buy big" data-act="${esc(it.id)}" data-do="buy">${I.tag}Buy</button>` : ''}${it.price && !it.trial && !isInstalled(it) && !S.jobsByItem.get(it.id) ? `<button class="btn big" data-act2="${esc(it.id)}">${I.dl} Download</button>` : ''}${saveBtn(it.id)}${it.home ? `<button class="btn big" data-ext="${esc(it.home)}">${I.globe} Website</button>` : ''}${inst ? `<button class="btn btn-ghost big" data-remove="${esc(it.id)}">${I.trash} ${isMac() ? 'Move to Trash' : 'Uninstall'}</button>` : ''}</div>
+      ? (it.verified ? `<b>Official download from ${esc(it.host)}.</b> Grab checks its checksum before installing, so a tampered file gets blocked.` : `<b>Official download from ${esc(it.host)}</b>, taken from Homebrew's reviewed catalog. This vendor does not publish a fixed checksum.`)
+      : '<b>Installed through winget</b>, Microsoft\'s package manager. The installer comes from the publisher and its hash is checked before it runs.';
+    const about = isMac() ? it.desc : (it.mdesc || '');
+    const tags = `${verLabel(it) ? `<span class="pill">${esc(verLabel(it))}</span>` : ''}${it.label ? `<span class="pill">${esc(it.label)}</span>` : ''}${inst ? `<span class="pill">${I.check}Installed</span>` : ''}`;
+    clearTimeout(sheetT);
+    sh.innerHTML = `<div class="hero sh-hero enter" style="--hc:${hueColor(it.id || it.name)}">${heroBg(GLYPH.box, it.id, false)}<button class="btn icon sh-close" data-close title="Close">${I.x}</button>${iconHTML(it)}<h3>${esc(it.name)}</h3><div class="pub"><span>${esc(isMac() ? (it.host || '') : (it.publisher || ''))}</span>${tags}</div></div>
+      ${about ? `<p class="about">${esc(about)}</p>` : ''}
+      <div class="actions">${actionHTML(it, 'big')}${it.price && it.trial ? `<button class="btn btn-buy big" data-act="${esc(it.id)}" data-do="buy">${I.tag}Buy</button>` : ''}${it.price && !it.trial && !isInstalled(it) && !S.jobsByItem.get(it.id) ? `<button class="btn big" data-act2="${esc(it.id)}">${I.dl}Download</button>` : ''}${saveBtn(it.id)}${it.home ? `<button class="btn big" data-ext="${esc(it.home)}">${I.globe}Website</button>` : ''}${inst ? `<button class="btn btn-ghost big" data-remove="${esc(it.id)}">${I.trash}${isMac() ? 'Move to Trash' : 'Uninstall'}</button>` : ''}</div>
       ${it.price ? `<div class="paynote">${I.tag}<div><b>${it.price === 'sub' ? 'This app needs a paid subscription.' : 'This app costs money.'}</b> ${it.trial ? esc(it.trial.note) + ' After that, buy it from the developer.' : 'Buy it on the developer\'s website, then use Download to install the official version here.'}</div></div>` : ''}
       <div class="facts">
         <div class="fact"><span>Latest version</span><span>${esc(String(it.ver || '').split(',')[0] || 'n/a')}</span></div>
         ${sc && sc.installedVer ? `<div class="fact"><span>Installed</span><span>${esc(sc.installedVer)}</span></div>` : ''}
-        ${isMac() ? `<div class="fact"><span>Downloads from</span><span>${esc(it.host)}</span></div>` : ''}
         <div class="fact"><span>Price</span><span>${it.price === 'paid' ? 'Paid' : it.price === 'sub' ? 'Subscription' : 'No price listed'}</span></div>
         ${it.price ? `<div class="fact"><span>Free trial</span><span>${it.trial ? esc(it.trial.label) : 'None confirmed'}</span></div>` : ''}
-        <div class="fact"><span>ID</span><span>${esc(it.id)}</span></div>
-        ${it.deprecated ? `<div class="fact"><span>Status</span><span style="color:var(--warn)">No longer maintained</span></div>` : ''}
+        ${isMac() ? `<div class="fact"><span>Downloads from</span><span>${esc(it.host)}</span></div>` : ''}
+        <div class="fact${isMac() ? '' : ' wide'}"><span>ID</span><span>${esc(it.id)}</span></div>
+        ${it.deprecated ? '<div class="fact wide warn"><span>Status</span><span>No longer maintained by its developer</span></div>' : ''}
       </div>
       <div class="shield">${I.shield}<div>${shield}</div></div>`;
     sh.dataset.id = id;
-    hydrateIcons(sh); fluid.magnet(sh);
-    sh.hidden = false; back.hidden = false;
-    requestAnimationFrame(() => { sh.classList.add('on'); back.classList.add('on'); });
+    hydrateIcons(sh);
+    sh.hidden = false; back.hidden = false; sh.scrollTop = 0;
+    requestAnimationFrame(() => { if (tok !== sheetTok) return; sh.classList.add('on'); back.classList.add('on'); });
   }
   function closeSheet() {
     const sh = $('#sheet'), back = $('#sheet-back');
-    if (sh.hidden) return;
-    sh.classList.remove('on'); back.classList.remove('on'); if (!REDUCE && sh.animate) sh.animate([{ scale: '1 1' }, { scale: '.9 1.06' }, { scale: '1.05 .95' }], { duration: 320, easing: 'ease-in' });
-    setTimeout(() => { sh.hidden = true; back.hidden = true; sh.innerHTML = ''; }, 420);
+    if (sh.hidden) return false;
+    const tok = ++sheetTok; // a sheet opened while this one slides out must not be hidden by it
+    sh.classList.remove('on'); back.classList.remove('on');
+    clearTimeout(sheetT);
+    sheetT = setTimeout(() => { if (tok !== sheetTok) return; sh.hidden = true; back.hidden = true; sh.innerHTML = ''; }, S.motion === 'off' ? 0 : 420);
+    return true;
+  }
+
+  // ---------- dialogs (Lumen's Nova dialog) ----------
+  let dlgDone = null;
+  function dialog({ ic = 'var(--accent)', glyph = GLYPH.grab, icon = MARK, eye = 'Grab', title, lead = '', body = '', buttons = [{ label: 'OK', cls: 'btn-solid', value: true }], wide = false }) {
+    if (dlgDone) dlgDone(null);
+    const d = $('#dlg');
+    d.innerHTML = `<div class="dlg${wide ? ' wide' : ''}" role="dialog" aria-modal="true">${hero({ ic, glyph, icon, eye, title, lead, seed: 'dlg' + title })}${body}<div class="dlg-acts">${buttons.map((b, i) => `<button class="btn big ${b.cls || ''}" data-dlg="${i}">${b.label}</button>`).join('')}</div></div>`;
+    d.hidden = false; hydrateIcons(d); watchHeroes(d);
+    setTimeout(() => { const p = $('.dlg-acts .btn:last-child', d); if (p) p.focus(); }, 30);
+    return new Promise((resolve) => {
+      dlgDone = (v) => { dlgDone = null; d.hidden = true; d.innerHTML = ''; resolve(v); };
+      d.onclick = (e) => { const b = e.target.closest('[data-dlg]'); if (b) dlgDone(buttons[+b.dataset.dlg].value); else if (e.target === d) dlgDone(null); };
+    });
+  }
+  const WHATS_NEW = [
+    ['#5b8cff', I.spark, 'A whole new look', 'Grab now wears Lumen\'s design: an ink side rail, big colour banners for every section, and glass cards.'],
+    ['#8b5cf6', I.wave, 'Calmer, livelier motion', 'Grab moves on the exact same springs as Lumen. Softer bounces, and scrolling glides without rubber-banding.'],
+    ['#12b886', I.up, 'A better update experience', 'Updates download in the background with a progress ring, then a proper restart screen brings you back.'],
+    ['#f59e0b', I.sliders, 'Light, dark and your colour', 'Follow your system or pick light or dark, and choose an accent from Lumen\'s palette.'],
+    ['#ec4899', I.shield, 'Steadier under the hood', 'Fixes for search, the detail panel, cancelling, offline use and more. Nothing runs while Grab is idle.'],
+  ];
+  function whatsNew() {
+    return dialog({ wide: true, ic: 'var(--accent)', eye: "What's new", title: `Grab ${esc(String(S.info.version || '2.0').split('.').slice(0, 2).join('.'))}`, lead: 'Grab joins the Lumen family.',
+      body: `<ul class="wn-list">${WHATS_NEW.map(([c, ic, t, d], i) => `<li style="--ic:${c};--i:${i}"><i>${ic}</i><div><b>${t}</b>${d}</div></li>`).join('')}</ul>`,
+      buttons: [{ label: "Let's go", cls: 'btn-solid', value: true }] });
   }
 
   // ---------- toasts ----------
-  function toast(msg, bad = false) {
+  function toast(msg, kind = 'ok') {
+    if (kind === true) kind = 'bad';
     const t = document.createElement('div');
-    t.className = 'toast' + (bad ? ' bad' : '');
-    t.innerHTML = (bad ? I.x : I.check) + `<span>${esc(msg)}</span>`;
-    $('#toasts').appendChild(t); jellyIn(t); setTimeout(() => jelly(t, 0.8), 60);
-    setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, bad ? 6000 : 3800);
+    t.className = 'toast ' + kind;
+    t.innerHTML = `<span class="t-orb">${kind === 'bad' ? I.x : kind === 'info' ? I.dl : I.check}</span><span>${esc(msg)}</span>`;
+    const box = $('#toasts');
+    box.appendChild(t); while (box.children.length > 4) box.firstElementChild.remove();
+    kick($('.t-orb', t), 0.8, 0.6);
+    setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, kind === 'bad' ? 6000 : 3800);
   }
 
   // ---------- actions ----------
+  async function confirmRemove(id) {
+    const it = S.items.get(id) || { id, name: 'this app' };
+    return dialog({ ic: '#f0506e', glyph: I.trash, icon: iconHTML(it), eye: isMac() ? 'Move to Trash' : 'Uninstall', title: esc(it.name),
+      body: `<p class="dlg-tx">${isMac() ? `Grab moves <b>${esc(it.name)}</b> to the Trash. If it is open, Grab quits it first. You can put it back from the Trash.` : `Grab asks winget to uninstall <b>${esc(it.name)}</b>. Its own uninstaller may ask you a question.`}</p>`,
+      buttons: [{ label: 'Cancel', cls: 'btn-ghost', value: false }, { label: isMac() ? 'Move to Trash' : 'Uninstall', cls: 'btn-bad', value: true }] });
+  }
   async function doAct(id, what, jobId) {
     try {
       if (what === 'get') await G.install(id);
       else if (what === 'update') await G.update(id);
-      else if (what === 'open') await G.open(id);
+      else if (what === 'open') { const r = await G.open(id); if (r) toast(`Could not open ${(S.items.get(id) || {}).name || 'the app'}`, 'bad'); }
       else if (what === 'cancel') await G.cancel(Number(jobId));
       else if (what === 'quit') await G.resume(Number(jobId));
       else if (what === 'detail') openSheet(id);
@@ -660,65 +557,84 @@
         const it = S.items.get(id) || {};
         let home = it.home || it.mhome;
         if (!home && !isMac()) { const m = await G.meta(id).catch(() => null); home = m && m.home; }
-        if (home) { G.external(home); toast(`Opening ${it.name || 'the developer'}'s website`); } else openSheet(id);
+        if (home) { G.external(home); toast(`Opening ${it.name || 'the developer'}'s website`, 'info'); } else openSheet(id);
       }
-    } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true); }
+    } catch (e) { toast(errText(e), 'bad'); }
+  }
+  async function getMany(ids, key, label) {
+    if (S.busy.has(key)) return 0;
+    S.busy.add(key);
+    let n = 0;
+    try { for (const id of ids) { try { await G.install(id); n++; } catch {} } } finally { S.busy.delete(key); }
+    if (n) toast(`${label} ${plural(n, 'app')}`, 'info');
+    return n;
   }
 
   document.addEventListener('click', async (e) => {
     const t = e.target.closest('button, [data-open], [data-pack], [data-ext], .nav-btn');
-    if (!t) return;
+    if (!t || t.closest('#dlg')) return;
     if (t.matches('.nav-btn')) { go(t.dataset.view); return; }
-    if (t.dataset.act) { e.stopPropagation(); doAct(t.dataset.act, t.dataset.do, t.dataset.job); return; }
+    if (t.dataset.act) { e.stopPropagation(); if (t.dataset.do !== 'none') doAct(t.dataset.act, t.dataset.do, t.dataset.job); return; }
     if (t.dataset.ext) { G.external(t.dataset.ext); return; }
-    if (t.dataset.act2) { e.stopPropagation(); try { await G.install(t.dataset.act2); t.remove(); toast('Downloading the official version'); } catch (err) { toast(String(err.message || err), true); } return; }
+    if (t.dataset.go) { if (t.dataset.go === 'saved') S.savedItems = null; S.view = ''; go(t.dataset.go); return; }
+    if (t.dataset.act2) { e.stopPropagation(); try { await G.install(t.dataset.act2); t.remove(); toast('Downloading the official version', 'info'); } catch (err) { toast(errText(err), 'bad'); } return; }
     if (t.dataset.save) {
-      const id = t.dataset.save; if (S.saved.has(id)) S.saved.delete(id); else { S.saved.add(id); burst(t, 10); }
+      const id = t.dataset.save; if (S.saved.has(id)) S.saved.delete(id); else S.saved.add(id);
       store.set('grab-saved', [...S.saved]); S.savedItems = null;
-      const nb = document.createElement('div'); nb.innerHTML = saveBtn(id); t.replaceWith(nb.firstElementChild); jelly($(`[data-save="${sel(id)}"]`), 1.5);
+      const nb = document.createElement('div'); nb.innerHTML = saveBtn(id); const b = nb.firstElementChild; t.replaceWith(b); kick(b, 1, 0.8);
       badges(); if (S.view === 'saved') render(); return;
     }
-    if (t.dataset.savedAll != null) { const todo = (S.savedItems || []).filter(it => S.saved.has(it.id) && !isInstalled(S.items.get(it.id) || it) && !it.price); for (const it of todo) { try { await G.install(it.id); } catch {} } burst(t, 22); toast(`Grabbing ${todo.length} app${todo.length === 1 ? '' : 's'}`); t.disabled = true; return; }
-    if (t.dataset.motion) { setMotion(t.dataset.motion); render(); const b = $(`[data-motion="${t.dataset.motion}"]`); jelly(b, 2); burst(b, 14); return; }
-    if (t.dataset.theme) { applyTheme(t.dataset.theme); render(); burst($(`[data-theme="${t.dataset.theme}"]`), 12); return; }
-    if (t.dataset.updCheck != null) { t.disabled = true; t.textContent = 'Checking'; const u = await G.updCheck().catch(() => null); const line = $('#upd-line'); if (line) line.textContent = !u ? 'Could not check right now' : u.status === 'uptodate' ? 'You have the latest version' : ['available', 'downloading', 'unpacking', 'ready'].includes(u.status) ? `Grab ${String(u.latest || '').replace(/^v/, '')} is on its way` : u.error || 'Could not check right now'; t.disabled = false; t.textContent = 'Check for updates'; return; }
+    if (t.dataset.savedAll != null) { const todo = (S.savedItems || []).filter(it => S.saved.has(it.id) && grabbable(it)); t.disabled = true; await getMany(todo.map(x => x.id), 'saved', 'Grabbing'); return; }
+    if (t.dataset.motion) { setMotion(t.dataset.motion); render(); kick($(`[data-motion="${t.dataset.motion}"]`), 1, 0.6); return; }
+    if (t.dataset.accent) { applyAccent(t.dataset.accent); render(); kick($(`[data-accent="${sel(t.dataset.accent)}"]`), 1, 0.8); return; }
+    if (t.dataset.appearance) { applyAppearance(t.dataset.appearance); render(); return; }
+    if (t.dataset.whatsnew != null) { whatsNew(); return; }
+    if (t.dataset.updCheck != null) {
+      t.disabled = true; const label = t.innerHTML; t.textContent = 'Checking';
+      const u = await G.updCheck().catch(() => null); const line = $('#upd-line');
+      if (line) line.textContent = !u ? 'Could not check right now. Try again in a moment.' : u.status === 'uptodate' ? `You have the latest version, Grab ${u.current || S.info.version}.` : ['available', 'downloading', 'unpacking', 'ready'].includes(u.status) ? `Grab ${String(u.latest || '').replace(/^v/, '')} is on its way. Watch the card in the side rail.` : (u.error ? `Could not check: ${u.error}` : 'Could not check right now.');
+      t.disabled = false; t.innerHTML = label; return;
+    }
     if (t.dataset.free != null) { S.freeOnly = !S.freeOnly; try { localStorage.setItem('grab-free', S.freeOnly ? '1' : '0'); } catch {} render(); return; }
-    if (t.dataset.packBack != null) { S.pack = null; fluid.jump(0); render(); return; }
+    if (t.dataset.packBack != null) { S.pack = null; render(); return; }
     if (t.dataset.packAll) {
       const p = S.packs.find(x => x.id === t.dataset.packAll); if (!p) return;
-      const todo = p.items.filter(it => !isInstalled(S.items.get(it.id) || it) && !it.price);
-      for (const it of todo) { try { await G.install(it.id); } catch {} }
-      burst(t, 22); toast(`Grabbing ${todo.length} app${todo.length === 1 ? '' : 's'}`); t.disabled = true;
+      const todo = p.items.filter(grabbable);
+      t.disabled = true; await getMany(todo.map(x => x.id), 'pack:' + p.id, 'Grabbing');
       return;
     }
-    if (t.dataset.clearDone != null) { for (const j of [...S.jobsById.values()]) if (['done', 'error', 'canceled'].includes(j.state)) { await G.dismiss(j.id); S.jobsById.delete(j.id); if (S.jobsByItem.get(j.itemId) === j) S.jobsByItem.delete(j.itemId); } renderDownloads(); badges(); return; }
-    if (t.dataset.pack) { S.pack = t.dataset.pack; fluid.jump(0); render(); return; }
-    if (t.dataset.url != null) { try { await G.installUrl(t.dataset.url); toast('Downloading from link'); go('downloads'); } catch (err) { toast('That link does not look right', true); } return; }
-    if (t.dataset.cancel) { G.cancel(Number(t.dataset.cancel)); return; }
-    if (t.dataset.resume) { G.resume(Number(t.dataset.resume)); return; }
-    if (t.dataset.dismiss) { const id = Number(t.dataset.dismiss); await G.dismiss(id); const j = S.jobsById.get(id); S.jobsById.delete(id); if (j && S.jobsByItem.get(j.itemId) === j) S.jobsByItem.delete(j.itemId); renderDownloads(); badges(); return; }
+    if (t.dataset.clearDone != null) { for (const j of [...S.jobsById.values()]) if (['done', 'error', 'canceled'].includes(j.state)) { await G.dismiss(j.id).catch(() => {}); S.jobsById.delete(j.id); if (S.jobsByItem.get(j.itemId) === j) S.jobsByItem.delete(j.itemId); } if (S.view === 'downloads') renderDownloads(); badges(); return; }
+    if (t.dataset.pack) { S.pack = t.dataset.pack; render(); return; }
+    if (t.dataset.url != null) { try { await G.installUrl(t.dataset.url); toast('Downloading from the link', 'info'); go('downloads'); } catch { toast('That link does not look right', 'bad'); } return; }
+    if (t.dataset.cancel) { G.cancel(Number(t.dataset.cancel)).catch(() => {}); return; }
+    if (t.dataset.resume) { G.resume(Number(t.dataset.resume)).catch(() => {}); return; }
+    if (t.dataset.dismiss) { const id = Number(t.dataset.dismiss); await G.dismiss(id).catch(() => {}); const j = S.jobsById.get(id); S.jobsById.delete(id); if (j && S.jobsByItem.get(j.itemId) === j) S.jobsByItem.delete(j.itemId); if (S.view === 'downloads') renderDownloads(); badges(); return; }
     if (t.dataset.openpath) { G.openPath(t.dataset.openpath); return; }
     if (t.dataset.reveal) { G.reveal(t.dataset.reveal); return; }
     if (t.dataset.remove) {
       e.stopPropagation();
       const id = t.dataset.remove, it = S.items.get(id);
+      if (!(await confirmRemove(id))) return;
       try {
         await G.uninstall(id);
-        if (isMac()) { S.removed.add(id); S.installed.delete(id); toast(`${it ? it.name : 'App'} moved to Trash`); }
-        else { toast(`Removing ${it ? it.name : 'app'}`); }
+        if (isMac()) { S.removed.add(id); S.installed.delete(id); toast(`${it ? it.name : 'App'} moved to the Trash`); }
+        else toast(`Removing ${it ? it.name : 'the app'}`, 'info');
         closeSheet(); refreshActions(id); if (S.view === 'installed' || S.view === 'updates') render();
-      } catch (err) { toast(String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true); }
+      } catch (err) { toast(errText(err), 'bad'); }
       return;
     }
     if (t.dataset.close != null) { closeSheet(); return; }
     if (t.dataset.updateAll != null) {
-      const ups = (S.scan || []).filter(s => s.update);
-      for (const s of ups) { try { await G.update(s.id); } catch {} }
-      toast(`Updating ${ups.length} app${ups.length > 1 ? 's' : ''}`);
+      const ups = (S.scan || []).filter(s => s.update && !ACTIVE.includes((S.jobsByItem.get(s.id) || {}).state));
+      t.disabled = true; await getMany(ups.map(s => s.id), 'upall', 'Updating');
       return;
     }
-    if (t.dataset.rescan != null) { S.scan = null; render(); S.scan = await G.scan(true); render(); badges(); return; }
-    if (t.dataset.retryCat != null) { S.cat.error = null; render(); G.refreshCatalog(); return; }
+    if (t.dataset.rescan != null) {
+      t.disabled = true; S.scan = null; render();
+      try { S.scan = remember(await G.scan(true)) || []; } catch (err) { S.scan = S.scan || []; toast(`Could not check your apps: ${errText(err)}`, 'bad'); }
+      if (S.view === 'updates' || S.view === 'installed') render(); badges(); return;
+    }
+    if (t.dataset.retryCat != null) { S.cat.error = null; foot(); render(); G.refreshCatalog().catch(() => {}); return; }
     if (t.dataset.open) { openSheet(t.dataset.open); return; }
   });
   $('#sheet-back').addEventListener('click', closeSheet);
@@ -727,7 +643,6 @@
   const qEl = $('#q');
   let qTimer = null, qSeq = 0;
   qEl.addEventListener('input', () => {
-    jelly($('#search-wrap'), 0.22);
     S.q = qEl.value;
     $('#clear').hidden = !S.q;
     clearTimeout(qTimer);
@@ -740,82 +655,134 @@
     if (e.target.closest('[data-recent-clear]')) { store.set('grab-recent', []); render(); }
   });
   async function runSearch() {
+    clearTimeout(qTimer);
     const my = ++qSeq;
     const q = S.q.trim();
-    if (q && !/^https?:\/\//i.test(q)) S.results = remember(await G.search(q));
-    else S.results = [];
-    if (my !== qSeq) return;
-    if (S.view !== 'discover') S.view = 'discover';
-    if (q) S.pack = null;
-    fluid.jump(0);
-    render();
+    let res = [];
+    if (q && !/^https?:\/\//i.test(q) && S.cat.ready) { try { res = await G.search(q); } catch { res = []; } }
+    if (my !== qSeq) return; // a newer search already answered: never let an older one overwrite its results
+    S.results = remember(res); S.resultsQ = q;
+    if (q) { S.pack = null; if (S.view !== 'discover') S.view = 'discover'; }
+    if (S.view === 'discover') render();
   }
-  qEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { if (qEl.value) { qEl.value = ''; S.q = ''; $('#clear').hidden = true; runSearch(); } else qEl.blur(); }
-    if (e.key === 'Enter') { addRecent(qEl.value); const b = $('[data-url]'); if (b) b.click(); else if (S.results[0]) openSheet(S.results[0].id); }
+  qEl.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); if (qEl.value) { qEl.value = ''; S.q = ''; $('#clear').hidden = true; runSearch(); } else qEl.blur(); }
+    if (e.key === 'Enter') {
+      addRecent(qEl.value);
+      if (S.resultsQ !== S.q.trim()) await runSearch(); // Enter right after typing: wait for this query's results, not the last one's
+      const b = $('[data-url]'); if (b) b.click(); else if (S.results[0] && S.resultsQ === S.q.trim()) openSheet(S.results[0].id);
+    }
   });
   $('#clear').addEventListener('click', (e) => { e.preventDefault(); qEl.value = ''; S.q = ''; $('#clear').hidden = true; runSearch(); qEl.focus(); });
+  const typing = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); qEl.focus(); qEl.select(); }
-    else if (e.key === '/' && document.activeElement !== qEl) { e.preventDefault(); qEl.focus(); }
-    else if (e.key === 'Escape') closeSheet();
+    else if ((e.metaKey || e.ctrlKey) && /^[1-6]$/.test(e.key)) { e.preventDefault(); const b = $$('.nav-btn')[+e.key - 1]; if (b) { b.click(); kick(b, 0.7, 0.5); } }
+    else if (e.key === '/' && !typing(document.activeElement)) { e.preventDefault(); qEl.focus(); }
+    else if (e.key === 'Escape') { if (dlgDone) dlgDone(null); else closeSheet(); }
   });
 
   // ---------- events from main ----------
-  G.onCatalog((c) => { S.cat = c; if (c.ready) G.packs().then(p => { S.packs = p || []; for (const x of S.packs) remember(x.items); if (S.view === 'discover' && !S.q) render(); }).catch(() => {}); remember(c.popular); foot(); if (S.view === 'discover') { if (S.q) runSearch(); else render(); } });
-  G.onScan((list) => { S.scan = remember(list); S.removed.clear(); for (const s of list) S.installed.add(s.id); badges(); if (S.view === 'updates' || S.view === 'installed') render(); else for (const s of list) refreshActions(s.id); });
+  G.onCatalog((c) => {
+    S.cat = c;
+    if (c.ready) G.packs().then(p => { S.packs = p || []; for (const x of S.packs) remember(x.items); if (S.view === 'discover' && !S.q) render(); }).catch(() => {});
+    remember(c.popular); foot();
+    // a background catalog refresh must not pull you out of the screen you are on
+    if (S.q && S.view === 'discover') runSearch(); else render();
+  });
+  G.onScan((list) => {
+    S.scan = remember(list || []); S.removed.clear(); for (const s of S.scan) S.installed.add(s.id); badges();
+    if (S.view === 'updates' || S.view === 'installed') render(); else for (const s of S.scan) refreshActions(s.id);
+  });
   G.onJob((j) => {
     const prev = S.jobsById.get(j.id);
     S.jobsById.set(j.id, j);
     S.jobsByItem.set(j.itemId, j);
-    if (j.state === 'done' && (!prev || prev.state !== 'done') && j.verb !== 'uninstall') setTimeout(() => { const b = $(`[data-act="${sel(j.itemId)}"]`); if (b) burst(b, 16); }, 60);
-    if (j.state === 'done' && (!prev || prev.state !== 'done')) {
+    const became = (st) => j.state === st && (!prev || prev.state !== st);
+    if (became('done')) {
       if (j.verb === 'uninstall') { S.installed.delete(j.itemId); S.removed.add(j.itemId); toast(`${j.name} removed`); }
       else {
         S.installed.add(j.itemId); S.removed.delete(j.itemId);
-        if (!document.hasFocus() && j.result !== 'saved') { try { new Notification('Grab', { body: `${j.name} is ready`, silent: true }); } catch {} }
-        if (S.scan) { const s = S.scan.find(x => x.id === j.itemId); if (s && j.verb !== 'uninstall') s.update = false; }
+        if (!document.hasFocus() && j.result !== 'saved') { try { new Notification(j.verb === 'update' ? `${j.name} is up to date` : `${j.name} is ready`, { body: j.result === 'pkg-opened' ? 'Finish in the installer window.' : 'Installed by Grab, straight from the developer.', silent: true }); } catch {} }
+        if (S.scan) { const s = S.scan.find(x => x.id === j.itemId); if (s) s.update = false; }
         toast(j.result === 'pkg-opened' ? `${j.name}: finish in the installer` : j.result === 'saved' ? `${j.name} saved to Downloads` : `${j.name} ${j.verb === 'update' ? 'updated' : 'installed'}`);
       }
     }
-    if (j.state === 'error' && (!prev || prev.state !== 'error')) toast(`${j.name}: ${j.msg}`, true);
-    if (j.state === 'needs-quit' && (!prev || prev.state !== 'needs-quit')) toast(`${j.msg}. Hit "Quit & install" to finish.`, true);
+    if (became('error')) toast(`${j.name}: ${j.msg}`, 'bad');
+    if (became('needs-quit')) toast(`${j.msg}. Hit Quit and install to finish.`, 'bad');
     refreshActions(j.itemId);
     badges();
     if (S.view === 'downloads') patchDownloadRow(j);
-    else if ((S.view === 'updates' || S.view === 'installed') && j.state === 'done' && (!prev || prev.state !== 'done')) render();
+    else if ((S.view === 'updates' || S.view === 'installed') && became('done')) render();
   });
-  // ---------- auto update card (Surge-style) ----------
+
+  // ---------- the update card and the restart screen (Lumen's update poster) ----------
+  let U = {};
   function renderUpd(u) {
     if (!u) return;
-    const card = $('#self-card'), btn = $('#self-btn'), title = $('#self-title'), fill = $('#self-fill');
-    const show = ['downloading', 'unpacking', 'ready', 'installing'].includes(u.status) || (u.status === 'available');
-    if (show && card.hidden) { card.hidden = false; jelly(card, 1.2); }
-    if (!show && !card.hidden && u.status !== 'error') card.hidden = true;
-    const v = ver => String(ver || '').replace(/^v/, '');
-    card.classList.toggle('busy', ['downloading', 'unpacking', 'available'].includes(u.status));
-    fill.style.width = (u.status === 'ready' ? 100 : u.progress || 0) + '%';
-    if (u.status === 'ready') { title.innerHTML = `Grab ${esc(v(u.latest))} is ready`; btn.textContent = 'Restart to update'; btn.disabled = false; if (!card.dataset.ready) { card.dataset.ready = 1; jelly(btn, 1.4); } }
-    else if (u.status === 'installing') { title.textContent = 'Updating'; btn.textContent = 'Restarting'; btn.disabled = true; }
-    else if (u.status === 'unpacking') { title.innerHTML = `Getting Grab ${esc(v(u.latest))} ready`; btn.textContent = 'Almost there'; btn.disabled = true; }
-    else { title.innerHTML = `Downloading Grab ${esc(v(u.latest))}`; btn.textContent = `${u.progress || 0}%`; btn.disabled = true; }
-    if (u.justUpdated && !S.greeted) { S.greeted = true; setTimeout(() => toast(`Updated to Grab ${u.justUpdated}`), 900); }
+    U = u;
+    const card = $('#self-card'), btn = $('#self-btn'), alt = $('#self-alt');
+    const v = String(u.latest || '').replace(/^v/, ''), s = u.status;
+    const show = ['available', 'downloading', 'unpacking', 'ready'].includes(s) || (s === 'error' && !card.hidden);
+    if (show && card.hidden) { card.hidden = false; card.style.animation = 'none'; void card.offsetWidth; card.style.animation = ''; }
+    if (!show && s !== 'installing') card.hidden = true;
+    const pct = s === 'ready' || s === 'unpacking' ? 100 : s === 'downloading' ? (u.progress || 0) : 0;
+    card.classList.toggle('spin', s === 'unpacking' || (s === 'downloading' && !u.size));
+    card.classList.toggle('calm', s === 'available' || s === 'error' || s === 'ready');
+    $('#self-fill').style.transform = `scaleX(${pct / 100})`;
+    $('#self-arc').style.strokeDashoffset = String(100 - pct);
+    const T = {
+      available: ['New version', `Grab ${v}`, 'Ready to download in the background.', 'Download', ''],
+      downloading: ['Downloading', `Grab ${v}`, u.size ? `${fmtBytes(u.bytes || 0)} of ${fmtBytes(u.size)}${u.speed ? ' · ' + fmtBytes(u.speed) + '/s' : ''}` : 'Starting the download', '', 'Cancel'],
+      unpacking: ['Almost there', `Checking ${v}`, 'Unpacking and verifying the download.', '', ''],
+      ready: ['Ready to install', `Grab ${v}`, 'Downloaded and checked. Restart to switch; it takes a few seconds.', 'Restart to update', ''],
+      installing: ['Updating', 'Restarting Grab', '', '', ''],
+      error: ['Update paused', 'The update hit a snag', u.error ? String(u.error).slice(0, 90) : 'Try again in a moment.', 'Try again', ''],
+    }[s];
+    if (T) {
+      $('#self-eye').textContent = T[0]; $('#self-title').textContent = T[1]; $('#self-sub').textContent = T[2];
+      btn.textContent = T[3]; btn.hidden = !T[3]; btn.disabled = false; alt.textContent = T[4]; alt.hidden = !T[4];
+    }
+    if (s === 'ready' && !card.dataset.ready) { card.dataset.ready = '1'; kick(btn, 1, 0.8); }
+    const rs = $('#restart');
+    if (s === 'installing') { $('#rs-num').textContent = v; $('#rs-sub').textContent = v ? `Back in a few seconds with Grab ${v}` : 'Back in a few seconds'; rs.hidden = false; }
+    else rs.hidden = true;
+    if (u.justUpdated && !S.greeted) {
+      S.greeted = true;
+      setTimeout(() => toast(`Updated to Grab ${u.justUpdated}`), 900);
+      if (/^2\.0\./.test(u.justUpdated) && !store.get('grab-seen-2.0', false)) { store.set('grab-seen-2.0', true); setTimeout(whatsNew, 1400); }
+    }
   }
   G.onUpdater(renderUpd);
-  $('#self-btn').addEventListener('click', () => G.updInstall());
+  $('#self-btn').addEventListener('click', async () => {
+    const s = U.status;
+    if (s === 'error') { G.updCheck().catch(() => {}); return; }
+    if (s === 'ready') {
+      const live = [...S.jobsById.values()].filter(j => ACTIVE.includes(j.state)).length;
+      if (live && !(await dialog({ ic: '#f59e0b', glyph: GLYPH.dl, icon: I.dl, eye: 'Restart to update', title: 'Still installing', body: `<p class="dlg-tx">Grab is still working on <b>${plural(live, 'app')}</b>. Restarting now stops ${live === 1 ? 'it' : 'them'}, and you would need to grab ${live === 1 ? 'it' : 'them'} again.</p>`, buttons: [{ label: 'Wait', cls: 'btn-ghost', value: false }, { label: 'Restart anyway', cls: 'btn-warn', value: true }] }))) return;
+    }
+    $('#self-btn').disabled = true;
+    G.updInstall().catch(() => {});
+  });
+  $('#self-alt').addEventListener('click', () => { if (U.status === 'downloading') G.updCancel().catch(() => {}); });
 
   // ---------- boot ----------
   (async () => {
     S.info = await G.info();
     document.body.classList.add(isMac() ? 'mac' : 'win');
     $('#kbd').textContent = isMac() ? '\u2318K' : 'Ctrl K';
+    if (S.appearance !== 'system' && G.appearance) G.appearance(S.appearance).catch(() => {});
     S.cat = await G.catalog();
     remember(S.cat.popular);
-    for (const j of await G.jobs()) { S.jobsById.set(j.id, j); S.jobsByItem.set(j.itemId, j); }
+    for (const j of await G.jobs()) { S.jobsById.set(j.id, j); S.jobsByItem.set(j.itemId, j); if (j.state === 'done' && j.verb !== 'uninstall' && j.result !== 'saved') S.installed.add(j.itemId); }
     foot(); render(); badges();
-    G.scan(false).then(list => { if (list && list.length) { S.scan = remember(list); for (const s of list) S.installed.add(s.id); badges(); if (S.view !== 'discover') render(); else for (const s of list) refreshActions(s.id); } }).catch(() => {});
-    if (S.cat.ready) G.packs().then(p => { S.packs = p || []; for (const x of S.packs) remember(x.items); if (S.view === 'discover' && !S.q) render(); }).catch(() => {});
+    if (S.cat.ready) {
+      G.scan(false).then(list => { if (!list || S.scan) return; S.scan = remember(list); for (const s of list) S.installed.add(s.id); badges(); if (S.view === 'updates' || S.view === 'installed') render(); else for (const s of list) refreshActions(s.id); }).catch(() => {});
+      G.packs().then(p => { S.packs = p || []; for (const x of S.packs) remember(x.items); if (S.view === 'discover' && !S.q) render(); }).catch(() => {});
+    }
     G.updState().then(renderUpd).catch(() => {});
+    // people coming from Grab 1.x see what changed once
+    if (!store.get('grab-seen-2.0', false)) { const was1x = store.get('grab-theme', null) != null || store.get('grab-saved', null) != null; store.set('grab-seen-2.0', true); if (was1x && !S.greeted) setTimeout(whatsNew, 900); }
     G.ready();
-  })().catch(e => { console.error('boot failed', e); G.ready(); });
+  })().catch(e => { console.warn('boot failed', e && e.message); G.ready(); });
 })();
