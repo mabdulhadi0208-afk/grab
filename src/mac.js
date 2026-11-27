@@ -403,7 +403,7 @@ function appManagement({ platform = process.platform, major = parseInt(require('
       if (app === mine || /^(Safari|Grab)\.app$/.test(n)) continue
       try {
         const st = fs.statSync(path.join(app, 'Contents'))
-        if (st.uid !== process.getuid()) continue   // only apps you own: the system ones are guarded anyway
+        if (process.getuid && st.uid !== process.getuid()) continue   // only apps you own: the system ones are guarded anyway
         probe = path.join(app, 'Contents'); break
       } catch {}
     }
