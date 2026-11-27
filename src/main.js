@@ -502,6 +502,9 @@ ipcMain.handle('meta', async (_e, id) => {
 });
 ipcMain.handle('fav', (_e, host) => favicon(host));
 ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); });
+// App Management (Mac): can Grab update and delete other apps, and the way to the switch in System Settings
+ipcMain.handle('access', () => (IS_MAC && backend.appManagement ? backend.appManagement() : 'allowed'));
+ipcMain.handle('access:open', () => { if (IS_MAC) shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles'); });
 ipcMain.handle('appearance', (_e, mode) => {
   if (!['system', 'light', 'dark'].includes(mode)) return;
   nativeTheme.themeSource = mode;

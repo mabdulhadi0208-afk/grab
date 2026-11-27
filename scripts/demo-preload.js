@@ -82,7 +82,7 @@ const on = (k) => (fn) => { L[k].push(fn); return () => {}; };
 const ok = (v) => Promise.resolve(v);
 const offline = P.get('offline') === '1';
 window.grab = {
-  info: () => ok({ platform: 'darwin', arch: 'arm64', version: '2.0.0', winget: null, dark: false }),
+  info: () => ok({ platform: 'darwin', arch: 'arm64', version: '2.1.0', winget: null, dark: false }),
   catalog: () => ok(offline ? { ready: false, error: 'Could not load the app catalog. Check your internet connection.', count: 0, popular: [] } : { ready: true, error: null, count: 7412, ts: Date.now(), popular: pick(POP) }),
   refreshCatalog: () => ok({}),
   search: (q) => ok(ALL.filter(a => (a.name + ' ' + a.desc).toLowerCase().includes(String(q).toLowerCase()))),
@@ -91,7 +91,7 @@ window.grab = {
   jobs: () => ok(JOBS), scan: () => ok(offline ? [] : SCAN), uninstall: () => ok(true), open: () => ok(''), openPath: () => ok(), reveal: () => ok(), external: () => ok(),
   icon: () => ok(null), meta: () => ok(null), fav: () => ok(null), packs: () => ok(offline ? [] : PACKS),
   updState: () => ok(UPD[P.get('upd') || 'none']), updCheck: () => ok(UPD.none), updInstall: () => ok(), updCancel: () => ok(),
-  ready: () => ok(), appearance: (m) => ipcRenderer.invoke('appearance', m),
+  ready: () => ok(), access: () => ok(P.get('access') || 'allowed'), openAccess: () => ok(), appearance: (m) => ipcRenderer.invoke('appearance', m),
   onCatalog: on('catalog'), onJob: on('job'), onScan: on('scan'), onUpdater: on('updater'),
 };
 window.__demo = { emit: (k, v) => L[k].forEach(f => f(v)), UPD };

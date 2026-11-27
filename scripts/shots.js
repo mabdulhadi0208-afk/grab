@@ -26,6 +26,7 @@ const SHOTS = [
   ['settings', { upd: 'ready' }, [click('[data-view="settings"]')]],
   ['whats-new', {}, [click('[data-view="settings"]'), `setTimeout(() => document.querySelector('[data-whatsnew]').click(), 300)`]],
   ['uninstall-dialog', {}, [click('[data-view="installed"]'), `setTimeout(() => document.querySelector('[data-remove="discord"]').click(), 300)`]],
+  ['access', { access: 'denied' }, []],
   ['restart', { upd: 'installing' }, []],
   ['offline', { offline: '1' }, []],
   ['downloads-empty', { jobs: '0' }, [click('[data-view="downloads"]')]],

@@ -426,7 +426,8 @@
       <div class="set-card"><h3>Grab</h3>
         <div class="set"><div><b>Grab ${esc(S.info.version || '')}</b><span id="upd-line">Updates download in the background and install when you restart.</span></div><button class="btn" data-upd-check>${I.up}Check for updates</button></div>
         <div class="set"><div><b>Shortcuts</b><div class="kbds"><span><kbd>${mod}K</kbd> Search</span><span><kbd>/</kbd> Search</span><span><kbd>${mod}1</kbd> to <kbd>${mod}6</kbd> Switch sections</span><span><kbd>Esc</kbd> Close</span></div></div></div>
-        <div class="set"><div><b>What's new</b><span>See what changed in Grab 2.0.</span></div><button class="btn" data-whatsnew>${I.spark}What's new</button></div></div>`, 'settings');
+        ${isMac() ? `<div class="set"><div><b>App Management</b><span>macOS has to allow Grab to update and remove other apps. <span id="acc-line">${accessLine()}</span></span></div><button class="btn" data-access>${I.shield}Open System Settings</button></div>` : ''}
+        <div class="set"><div><b>What's new</b><span>See what changed in Grab ${esc(WHATS_NEW.version)}.</span></div><button class="btn" data-whatsnew>${I.spark}What's new</button></div></div>`, 'settings');
   }
   function render() {
     $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
@@ -513,18 +514,39 @@
       d.onclick = (e) => { const b = e.target.closest('[data-dlg]'); if (b) dlgDone(buttons[+b.dataset.dlg].value); else if (e.target === d) dlgDone(null); };
     });
   }
-  const WHATS_NEW = [
-    ['#5b8cff', I.spark, 'A whole new look', 'Grab now wears Lumen\'s design: an ink side rail, big colour banners for every section, and glass cards.'],
-    ['#8b5cf6', I.wave, 'Calmer, livelier motion', 'Grab moves on the exact same springs as Lumen. Softer bounces, and scrolling glides without rubber-banding.'],
-    ['#12b886', I.up, 'A better update experience', 'Updates download in the background with a progress ring, then a proper restart screen brings you back.'],
-    ['#f59e0b', I.sliders, 'Light, dark and your colour', 'Follow your system or pick light or dark, and choose an accent from Lumen\'s palette.'],
-    ['#ec4899', I.shield, 'Steadier under the hood', 'Fixes for search, the detail panel, cancelling, offline use and more. Nothing runs while Grab is idle.'],
-  ];
+  // the What's new sheet shows ONLY this version's changes, once, after Grab updates to it (rewrite it every release)
+  const WHATS_NEW = { version: '2.1', lead: 'Grab asks for what it needs to keep your apps up to date.', items: [
+    ['#12b886', I.shield, 'Asks for App Management', 'macOS has to let Grab update and remove other apps. Grab now checks when you open it and walks you to the switch in System Settings in two steps.'],
+    ['#5b8cff', I.spark, "What's new after every update", 'This sheet now shows up once after each Grab update, with only what changed in that version.'],
+    ['#8b5cf6', I.sliders, 'A status line in Settings', 'Settings shows whether App Management is on, with a button straight to it.'],
+  ] };
   function whatsNew() {
-    return dialog({ wide: true, ic: 'var(--accent)', eye: "What's new", title: `Grab ${esc(String(S.info.version || '2.0').split('.').slice(0, 2).join('.'))}`, lead: 'Grab joins the Lumen family.',
-      body: `<ul class="wn-list">${WHATS_NEW.map(([c, ic, t, d], i) => `<li style="--ic:${c};--i:${i}"><i>${ic}</i><div><b>${t}</b>${d}</div></li>`).join('')}</ul>`,
+    return dialog({ wide: true, ic: 'var(--accent)', eye: "What's new", title: `Grab ${esc(WHATS_NEW.version)}`, lead: WHATS_NEW.lead,
+      body: `<ul class="wn-list">${WHATS_NEW.items.map(([c, ic, t, d], i) => `<li style="--ic:${c};--i:${i}"><i>${ic}</i><div><b>${t}</b>${d}</div></li>`).join('')}</ul>`,
       buttons: [{ label: "Let's go", cls: 'btn-solid', value: true }] });
   }
+  // ---------- App Management (Mac): Grab needs it to update and remove apps ----------
+  let accessOpen = false, accessState = 'allowed'
+  async function checkAccess() { try { accessState = await G.access() } catch { accessState = 'unknown' } const line = $('#acc-line'); if (line) line.innerHTML = accessLine(); return accessState }
+  const accessLine = () => accessState === 'allowed' ? `<span class="acc ok">${I.check}On</span>` : accessState === 'denied' ? `<span class="acc bad">${I.x}Off</span>` : `<span class="acc">Not checked yet</span>`
+  async function accessSheet(why) {
+    if (accessOpen || !isMac()) return
+    accessOpen = true
+    const v = await dialog({ ic: '#12b886', glyph: GLYPH.shield || I.shield, icon: I.shield, eye: 'One permission', title: 'Let Grab update your apps',
+      lead: why || 'macOS asks you to allow apps that update or remove other apps. Grab needs it to install updates.',
+      body: `<ol class="acc-steps"><li style="--i:0"><b>Open App Management</b><span>The button below takes you straight there, in System Settings, Privacy and Security.</span></li><li style="--i:1"><b>Turn on Grab</b><span>Grab is already in the list. Flip its switch on, then come back here.</span></li></ol>`,
+      buttons: [{ label: 'Later', cls: '', value: false }, { label: 'Open System Settings', cls: 'btn-solid', value: true }] })
+    accessOpen = false
+    store.set('grab-access-asked', Date.now())
+    if (v) G.openAccess().catch(() => {})
+  }
+  // back from System Settings: check again, and say so once it is on
+  window.addEventListener('focus', async () => {
+    if (!isMac() || accessState === 'allowed') return
+    const was = accessState
+    if (await checkAccess() === 'allowed' && was !== 'allowed') { toast('Grab can update your apps now'); if (accessOpen && dlgDone) dlgDone(false) }
+  })
+
 
   // ---------- toasts ----------
   function toast(msg, kind = 'ok') {
@@ -589,6 +611,7 @@
     if (t.dataset.accent) { applyAccent(t.dataset.accent); render(); kick($(`[data-accent="${sel(t.dataset.accent)}"]`), 1, 0.8); return; }
     if (t.dataset.appearance) { applyAppearance(t.dataset.appearance); render(); return; }
     if (t.dataset.whatsnew != null) { whatsNew(); return; }
+    if (t.dataset.access != null) { G.openAccess().catch(() => {}); return; }
     if (t.dataset.updCheck != null) {
       t.disabled = true; const label = t.innerHTML; t.textContent = 'Checking';
       const u = await G.updCheck().catch(() => null); const line = $('#upd-line');
@@ -699,6 +722,7 @@
     S.jobsById.set(j.id, j);
     S.jobsByItem.set(j.itemId, j);
     const became = (st) => j.state === st && (!prev || prev.state !== st);
+    if (became('error') && /not permitted|EPERM|App Management/i.test(String(j.msg || ''))) { accessState = 'denied'; accessSheet('Grab could not change an app in Applications because macOS has not allowed it yet.') }
     if (became('done')) {
       if (j.verb === 'uninstall') { S.installed.delete(j.itemId); S.removed.add(j.itemId); toast(`${j.name} removed`); }
       else {
@@ -750,7 +774,7 @@
     if (u.justUpdated && !S.greeted) {
       S.greeted = true;
       setTimeout(() => toast(`Updated to Grab ${u.justUpdated}`), 900);
-      if (/^2\.0\./.test(u.justUpdated) && !store.get('grab-seen-2.0', false)) { store.set('grab-seen-2.0', true); setTimeout(whatsNew, 1400); }
+      const vv = String(u.justUpdated).split('.').slice(0, 2).join('.'); if (vv === WHATS_NEW.version && !store.get('grab-seen-' + vv, false)) { store.set('grab-seen-' + vv, true); setTimeout(whatsNew, 1400); }
     }
   }
   G.onUpdater(renderUpd);
@@ -784,5 +808,7 @@
     // people coming from Grab 1.x see what changed once
     if (!store.get('grab-seen-2.0', false)) { const was1x = store.get('grab-theme', null) != null || store.get('grab-saved', null) != null; store.set('grab-seen-2.0', true); if (was1x && !S.greeted) setTimeout(whatsNew, 900); }
     G.ready();
+    // Mac: can Grab update and remove apps? Ask when you open Grab if it cannot (and once, at the start, when unsure)
+    if (isMac()) setTimeout(async () => { const st = await checkAccess(); if (st === 'denied' || (st === 'unknown' && !store.get('grab-access-asked', 0))) accessSheet() }, 1600)
   })().catch(e => { console.warn('boot failed', e && e.message); G.ready(); });
 })();

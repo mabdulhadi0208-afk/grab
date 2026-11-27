@@ -244,6 +244,8 @@ async function copyApp(src, dest, trashItem) {
   }
   let r = fs.existsSync(dest) ? { code: 1 } : await run('/usr/bin/ditto', [src, dest], { timeout: 600000 });
   if (r.code !== 0) {
+    // macOS blocked it because App Management is off for Grab: an admin password would not help, so say what will
+    if (/Operation not permitted/i.test(String(r.err || ''))) throw new Error('macOS has not allowed Grab to change apps yet (App Management is off)');
     // needs admin rights (app owned by root, or /Applications locked down)
     log('ditto needs admin', r.err);
     const script = `rm -rf ${shq(dest)} && /usr/bin/ditto ${shq(src)} ${shq(dest)}`;
@@ -382,3 +384,34 @@ function itemFromUrl(url) {
 }
 
 module.exports = { POPULAR, EXTRA_DIRS, fetchCatalog, slimCask, slimAll, parseArtifacts, findInstalledPath, scanInstalled, fetchItem, installFile, uninstall, itemFromUrl, readVersion, sniff };
+
+
+// ---------- App Management (macOS 13+) ----------
+// macOS only lets an app update or delete other apps once it is on in System Settings, Privacy and Security,
+// App Management. There is no API to ask, so Grab checks by making and removing an empty folder inside an app
+// you installed yourself (nothing inside the app changes). The first time it is refused, macOS adds Grab to that
+// list on its own, switched off, so the person only has to turn it on.
+function appManagement({ platform = process.platform, major = parseInt(require('os').release().split('.')[0], 10) || 0, dirs = appDirs() } = {}) {
+  if (platform !== 'darwin') return 'allowed'
+  if (major < 22) return 'allowed'   // before Ventura there is no such switch
+  const mine = process.execPath.split('.app/')[0] + '.app'
+  let probe = null
+  for (const dir of dirs) {
+    let names = []; try { names = fs.readdirSync(dir).filter(n => n.endsWith('.app')) } catch {}
+    for (const n of names) {
+      const app = path.join(dir, n)
+      if (app === mine || /^(Safari|Grab)\.app$/.test(n)) continue
+      try {
+        const st = fs.statSync(path.join(app, 'Contents'))
+        if (st.uid !== process.getuid()) continue   // only apps you own: the system ones are guarded anyway
+        probe = path.join(app, 'Contents'); break
+      } catch {}
+    }
+    if (probe) break
+  }
+  if (!probe) return 'unknown'
+  const p = path.join(probe, '.grab-access-' + process.pid)
+  try { fs.mkdirSync(p); fs.rmdirSync(p); return 'allowed' }
+  catch (e) { try { fs.rmdirSync(p) } catch {} return /EPERM|EACCES/.test(e.code || e.message) ? 'denied' : 'unknown' }
+}
+module.exports.appManagement = appManagement

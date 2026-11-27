@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('grab', {
   fav: call('fav'),
   packs: call('packs'),
   ready: call('ready'),
+  access: call('access'),
+  openAccess: call('access:open'),
   appearance: call('appearance'),
   onCatalog: on('catalog'),
   onJob: on('job'),

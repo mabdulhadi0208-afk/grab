@@ -15,6 +15,22 @@ let pass = 0;
 async function t(name, fn) { try { await fn(); pass++; console.log('ok  ', name); } catch (e) { console.error('FAIL', name, '\n', e); process.exitCode = 1; } }
 
 (async () => {
+  await t('App Management check', () => {
+    assert.strictEqual(mac.appManagement({ platform: 'win32' }), 'allowed');
+    assert.strictEqual(mac.appManagement({ platform: 'darwin', major: 21 }), 'allowed');   // before Ventura there is no switch
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grab-am-'));
+    assert.strictEqual(mac.appManagement({ platform: 'darwin', major: 24, dirs: [root] }), 'unknown');   // no app to check with
+    const app = path.join(root, 'Notes Plus.app', 'Contents'); fs.mkdirSync(app, { recursive: true });
+    assert.strictEqual(mac.appManagement({ platform: 'darwin', major: 24, dirs: [root] }), 'allowed');
+    assert.deepStrictEqual(fs.readdirSync(app), [], 'the check leaves the app exactly as it was');
+    if (process.getuid && process.getuid() !== 0) {   // a locked app folder reads as not allowed (root ignores the lock)
+      fs.chmodSync(app, 0o555);
+      assert.strictEqual(mac.appManagement({ platform: 'darwin', major: 24, dirs: [root] }), 'denied');
+      fs.chmodSync(app, 0o755);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   await t('cmpVer', () => {
     assert.strictEqual(U.cmpVer('1.10.0', '1.9'), 1);
     assert.strictEqual(U.cmpVer('157.0.8103.79', '157.0.8103.79'), 0);
