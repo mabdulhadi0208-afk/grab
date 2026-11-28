@@ -30,6 +30,8 @@ const SHOTS = [
   ['restart', { upd: 'installing' }, []],
   ['offline', { offline: '1' }, []],
   ['downloads-empty', { jobs: '0' }, [click('[data-view="downloads"]')]],
+  ['menu', {}, [`document.querySelector('#view').scrollTop = 700`, `(() => { const c = document.querySelector('.grid [data-open="figma"]'); const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.left + 120, clientY: r.top + 60 })); })()`]],
+  ['shortcuts', {}, [`document.dispatchEvent(new KeyboardEvent('keydown', { key: '?', bubbles: true }))`]],
 ];
 const ONLY = (process.env.GRAB_ONLY || '').split(',').filter(Boolean);
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
@@ -40,7 +42,7 @@ app.whenReady().then(async () => {
     nativeTheme.themeSource = theme;
     for (const [name, q, steps] of SHOTS) {
       if (ONLY.length && !ONLY.includes(name)) continue;
-      const w = new BrowserWindow({ width: W, height: H, useContentSize: true, show: true, backgroundColor: theme === 'dark' ? '#0a0c15' : '#f5f6fb', webPreferences: { preload: path.join(__dirname, 'demo-preload.js'), contextIsolation: false, sandbox: false } });
+      const w = new BrowserWindow({ width: W, height: H, useContentSize: true, show: true, backgroundColor: theme === 'dark' ? '#0d0c0a' : '#f6f3ed', webPreferences: { preload: path.join(__dirname, 'demo-preload.js'), contextIsolation: false, sandbox: false } });
       w.webContents.on('console-message', (_e, level, msg) => { if (level >= 2) console.log(`[${name}] console`, level, msg); });
       const ready = new Promise(r => w.webContents.once('dom-ready', r));
       w.loadFile(path.join(__dirname, '..', 'src', 'ui', 'index.html'), { query: { ...q, theme } }).catch(e => console.log('load failed', name, e.message));

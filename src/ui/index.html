@@ -10,7 +10,6 @@
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
-      <linearGradient id="nova-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--accent)"/><stop offset=".55" style="stop-color:var(--accent2)"/><stop offset="1" style="stop-color:var(--accent3)"/></linearGradient>
       <symbol id="grab-mark" viewBox="0 0 64 64"><path d="M32 13v25" /><path d="M21.5 28.5L32 39l10.5-10.5"/><path d="M15 43.5v3.2A4.3 4.3 0 0 0 19.3 51h25.4a4.3 4.3 0 0 0 4.3-4.3v-3.2"/></symbol>
     </defs>
   </svg>
@@ -22,12 +21,12 @@
         <span class="word">Grab</span>
       </div>
       <nav class="nav">
-        <button class="nav-btn active" data-view="discover" style="--ic:#5b8cff"><i class="ni"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></i><span>Discover</span></button>
-        <button class="nav-btn" data-view="updates" style="--ic:#12b886"><i class="ni"><svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.8h-4.8"/></svg></i><span>Updates</span><b class="badge" id="badge-updates"></b></button>
-        <button class="nav-btn" data-view="installed" style="--ic:#8b5cf6"><i class="ni"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/></svg></i><span>Installed</span></button>
-        <button class="nav-btn" data-view="downloads" style="--ic:#06b6d4"><i class="ni"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg></i><span>Downloads</span><b class="badge live" id="badge-downloads"></b></button>
-        <button class="nav-btn" data-view="saved" style="--ic:#ec4899"><i class="ni"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></i><span>Saved</span><b class="badge" id="badge-saved"></b></button>
-        <button class="nav-btn" data-view="settings" style="--ic:#f59e0b"><i class="ni"><svg viewBox="0 0 24 24"><path d="M5 7h9M18 7h1M5 12h2M11 12h8M5 17h7M16 17h3"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/></svg></i><span>Settings</span></button>
+        <button class="nav-btn active" data-view="discover"><i class="ni"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></i><span>Discover</span></button>
+        <button class="nav-btn" data-view="updates"><i class="ni"><svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.8h-4.8"/></svg></i><span>Updates</span><b class="badge" id="badge-updates"></b></button>
+        <button class="nav-btn" data-view="installed"><i class="ni"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/></svg></i><span>Installed</span></button>
+        <button class="nav-btn" data-view="downloads"><i class="ni"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></svg></i><span>Downloads</span><b class="badge live" id="badge-downloads"></b></button>
+        <button class="nav-btn" data-view="saved"><i class="ni"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></i><span>Saved</span><b class="badge" id="badge-saved"></b></button>
+        <button class="nav-btn" data-view="settings"><i class="ni"><svg viewBox="0 0 24 24"><path d="M5 7h9M18 7h1M5 12h2M11 12h8M5 17h7M16 17h3"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/></svg></i><span>Settings</span></button>
       </nav>
       <div class="rail-fill"></div>
       <div class="upd" id="self-card" hidden>

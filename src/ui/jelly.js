@@ -8,7 +8,8 @@
  *   press    -> 0.92x, release pops to 1.06x with a small overshoot, then settles
  *   objects  kick(el) squashes and stretches up to 15% and bounces once or twice (letters, drops)
  *   trail    a cursor follower that overshoots ~20px and stretches up to 1.2x along its travel
- *   scroll   wheel scrolling is critically damped: it glides to its target, no overshoot, no bounce
+ *   scroll   mouse wheels and trackpads glide on a critically damped spring: no overshoot, no bounce at the edges
+ *   easing   easing(kind) turns a spring into a CSS linear() curve, for compositor-run WAAPI entrances and exits
  * Modes: 'jelly' (default), 'calm' (heavily damped, almost no overshoot), 'off' (instant).
  */
 ;(function (global) {
@@ -16,7 +17,8 @@
     jelly: { k: 300, c: 22 },        // zeta 0.64 -> ~7.5% overshoot, settles in 1-2 wobbles
     bounce: { k: 380, c: 21.4 },     // zeta 0.55 -> squash impulses, one soft bounce
     trail: { k: 170, c: 19.8 },      // zeta 0.60 -> follower overshoots ~20px on a quick flick
-    critical: { k: 420, c: 41 },     // zeta 1.00 -> wheel scroll, no overshoot
+    critical: { k: 420, c: 41 },     // zeta 1.00 -> mouse-wheel glide, no overshoot
+    glide: { k: 1100, c: 66.3 },     // zeta 1.00 -> trackpad glide: keeps up with the fingers (~30ms), no overshoot
     calm: { k: 240, c: 25.5 },       // zeta 0.82
   }
   let MODE = 'jelly'
@@ -32,7 +34,7 @@
   }
   class S {
     constructor(v, kind, cb) { this.v = v; this.t = v; this.vel = 0; this.kind = kind || 'jelly'; this.cb = cb }
-    cfg() { if (this.kind === 'critical') return CFG.critical; return MODE === 'calm' ? CFG.calm : CFG[this.kind] }
+    cfg() { if (this.kind === 'critical' || this.kind === 'glide') return CFG[this.kind]; return MODE === 'calm' ? CFG.calm : CFG[this.kind] }
     to(t, vel) {
       this.t = t
       if (vel !== undefined) this.vel = vel
@@ -44,7 +46,7 @@
     step(dt) {
       const { k, c } = this.cfg(), n = Math.max(1, Math.ceil(dt * 240)), h = dt / n
       for (let i = 0; i < n; i++) { this.vel += (-k * (this.v - this.t) - c * this.vel) * h; this.v += this.vel * h }
-      const eps = this.kind === 'critical' ? 0.3 : 0.0008
+      const eps = this.kind === 'critical' || this.kind === 'glide' ? 0.3 : 0.0008
       if (Math.abs(this.vel) < eps * 20 && Math.abs(this.v - this.t) < eps) { this.v = this.t; this.vel = 0; live.delete(this) }
       this.cb && this.cb(this.v)
     }
@@ -73,8 +75,47 @@
     const req = () => { if (!queued) { queued = true; queueMicrotask(render) } }
     b = { s: new S(1, 'jelly', req), x: new S(0, 'jelly', req), y: new S(0, 'jelly', req), rx: new S(0, 'jelly', req), ry: new S(0, 'jelly', req), q: new S(0, 'bounce', req), hop: new S(0, 'bounce', req), hovered: false, pressed: false }
     el.style.willChange = 'transform'
+    unsmear(el)
     bodies.set(el, b)
     return b
+  }
+
+  // A CSS transition on transform turns every spring frame into a new 0.3-0.5s tween toward it, so the motion trails
+  // behind and the overshoot is smoothed away (the jelly looks dead). The spring is the transition: take transform out
+  // of the element's CSS transition list (colours, backgrounds and shadows keep theirs).
+  const MOVE = ['transform', 'scale', 'translate', 'rotate']
+  function unsmear(el) {
+    const cs = getComputedStyle(el), props = cs.transitionProperty.split(',').map(x => x.trim())
+    if (!props.some(p => p === 'all' || MOVE.includes(p))) return
+    const durs = cs.transitionDuration.split(','), dels = cs.transitionDelay.split(',')
+    const tfs = cs.transitionTimingFunction.match(/(cubic-bezier|steps|linear)\([^)]*\)|[a-z-]+/g) || ['ease']
+    const keep = []
+    props.forEach((p, i) => {
+      if (MOVE.includes(p)) return
+      const d = durs[i % durs.length].trim(), tf = tfs[i % tfs.length], dl = dels[i % dels.length].trim()
+      if (p === 'all') ['color', 'background-color', 'border-color', 'opacity'].forEach(q => keep.push(`${q} ${d} ${tf} ${dl}`))
+      else keep.push(`${p} ${d} ${tf} ${dl}`)
+    })
+    el.style.transition = keep.length ? keep.join(', ') : 'none'
+  }
+
+  // A spring as a CSS easing curve, for WAAPI and CSS animations that run on the compositor: samples the same spring
+  // (0 -> 1) the JS bodies use and returns { easing: 'linear(...)', duration } so an entrance or exit needs no frame
+  // work on the main thread at all.
+  const easeCache = {}
+  function easing(kindName = 'jelly') {
+    const key = kindName + (MODE === 'calm' ? ':calm' : '')
+    if (easeCache[key]) return easeCache[key]
+    const { k, c } = kindName === 'critical' || kindName === 'glide' ? CFG[kindName] : MODE === 'calm' ? CFG.calm : CFG[kindName] || CFG.jelly
+    let v = 0, vel = 0, t = 0
+    const h = 1 / 240, pts = [0]
+    while (t < 2) {
+      for (let i = 0; i < 4; i++) { vel += (-k * (v - 1) - c * vel) * h; v += vel * h; t += h }
+      pts.push(v)
+      if (Math.abs(v - 1) < 0.001 && Math.abs(vel) < 0.02) break
+    }
+    pts[pts.length - 1] = 1
+    return (easeCache[key] = { easing: `linear(${pts.map(x => +x.toFixed(4)).join(', ')})`, duration: Math.round(t * 1000) })
   }
 
   // kick: squash (positive = flatter) plus an optional hop, then bounce back once or twice
@@ -109,6 +150,7 @@
   }
   function onMove(e) {
     if (e.pointerType === 'touch') return
+    if (MODE === 'off') { if (current) leave(current); return }   // Motion Off: nothing moves under the pointer
     const sel = selector(); if (!sel) return
     const t = e.target && e.target.closest ? e.target.closest(sel) : null
     const target = t && !t.disabled && !t.hasAttribute('data-nojelly') ? t : null
@@ -124,7 +166,7 @@
     }
   }
   function onDown(e) {
-    if (e.button !== 0) return
+    if (e.button !== 0 || MODE === 'off') return
     const sel = selector(); if (!sel) return
     const t = e.target.closest && e.target.closest(sel)
     if (!t || t.disabled) return
@@ -142,31 +184,39 @@
     setTimeout(() => { const bb = bodies.get(el); if (bb && !bb.pressed) bb.s.to(bb.hovered ? hoverScale(k) : 1) }, 140)
   }
 
-  // ---------------------------------------------------------------- critically damped wheel scrolling
+  // ---------------------------------------------------------------- jelly scroll glide
+  // Mouse wheels and trackpads both glide: each wheel step moves a target and the page follows it on a critically
+  // damped spring (no overshoot, and the target is clamped to the page, so nothing ever rubber-bands past an edge).
+  // A trackpad already sends many small, smooth steps with its own momentum, so it gets a much stiffer spring that
+  // keeps up with the fingers (about 30 ms behind) and only rounds the steps off. The work per frame is one scrollTop
+  // write; the loop runs on requestAnimationFrame only while the page glides and stops on the frame it settles. The
+  // scroll listener is passive; the wheel listener must be able to take the step over, so it does next to nothing:
+  // no layout reads unless the pointer is over something that could scroll on its own (cached per element).
   function smoothScroll(target) {
     const isWin = target === window || target === document.scrollingElement
     const el = isWin ? document.scrollingElement : target
     const area = isWin ? window : target
-    let animating = false
-    const sp = new S(0, 'critical', v => { animating = true; el.scrollTop = v; if (!live.has(sp)) animating = false })
+    const sp = new S(0, 'critical', v => { el.scrollTop = v })
     area.addEventListener('scroll', () => { if (!live.has(sp)) { sp.v = sp.t = el.scrollTop; sp.vel = 0 } }, { passive: true })
+    const own = new WeakMap()
+    const scrollsItself = n => {
+      if (n.scrollHeight <= n.clientHeight + 1) return false
+      let v = own.get(n); if (v === undefined) { v = /(auto|scroll)/.test(getComputedStyle(n).overflowY); own.set(n, v) }
+      return v
+    }
     area.addEventListener('wheel', e => {
-      if (e.ctrlKey || e.defaultPrevented || MODE === 'off') return
-      // let nested scrollers and horizontal gestures keep native behaviour
+      if (e.ctrlKey || e.defaultPrevented) return   // (Motion Off: the spring jumps, so the step lands at once, no glide)
+      // horizontal gestures and nested scrollers keep native behaviour
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
-      // a trackpad (or Magic Mouse) already glides on its own, with momentum: it scrolls natively, on the compositor,
-      // instead of through a spring on the main thread (Chrome reports those with wheelDelta = -3 x delta, in pixels)
-      if (e.deltaMode === 0 && e.wheelDeltaY && Math.abs(e.wheelDeltaY + 3 * e.deltaY) < 1 && !live.has(sp)) return
-      let n = e.target
-      while (n && n !== el && n !== document.body) {
-        if (n.scrollHeight > n.clientHeight + 1 && n !== el && /(auto|scroll)/.test(getComputedStyle(n).overflowY)) return
-        n = n.parentElement
-      }
+      for (let n = e.target; n && n !== el && n !== document.body && n.nodeType === 1; n = n.parentElement) if (scrollsItself(n)) return
+      // a trackpad (or Magic Mouse) reports pixel steps (Chrome: wheelDelta = -3 x delta); a mouse wheel reports notches
+      const pad = e.deltaMode === 0 && !!e.wheelDeltaY && Math.abs(e.wheelDeltaY + 3 * e.deltaY) < 1
       const max = el.scrollHeight - el.clientHeight
       if (max <= 0) return
       e.preventDefault()
       const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * el.clientHeight : e.deltaY
       if (!live.has(sp)) { sp.v = el.scrollTop; sp.vel = 0 }
+      sp.kind = pad ? 'glide' : 'critical'
       sp.to(clamp(sp.t + d, 0, max))
     }, { passive: false })
     return sp
@@ -266,7 +316,8 @@
   }
 
   global.Jelly = {
-    init, kick, trail, letters, smoothScroll, entrances, Spring: S, CFG,
+    init, kick, trail, letters, smoothScroll, entrances, easing, Spring: S, CFG, selector,
+    bound: el => { const q = selector(); return !!(q && el && el.closest && el.closest(q)) },
     setMode(m) { MODE = reduceMotion ? 'off' : (m || 'jelly') }, getMode: () => MODE,
     EASE: 'cubic-bezier(.3,1.4,.5,1)',
   }

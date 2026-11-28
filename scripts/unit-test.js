@@ -210,6 +210,45 @@ async function t(name, fn) { try { await fn(); pass++; console.log('ok  ', name)
     assert.strictEqual(win.resolveId(rows[1], byId, items), 'Microsoft.VisualStudioCode');
   });
 
+  await t('settings export and import keep only what Grab knows', () => {
+    assert.throws(() => U.cleanPrefs(null)); assert.throws(() => U.cleanPrefs([])); assert.throws(() => U.cleanPrefs({ saved: [] }), /not a Grab settings file/);
+    const p = U.cleanPrefs({ app: 'Grab', version: '2.2.0', saved: ['figma', 'figma', 7, '', 'x'.repeat(300), ' arc '], recent: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'y'.repeat(41)], appearance: 'neon', motion: 'calm', freeOnly: 'yes', installedSort: 'updates', evil: '<script>' });
+    assert.deepStrictEqual(p, { app: 'Grab', version: '2.2.0', saved: ['figma', 'arc'], recent: ['a', 'b', 'c', 'd', 'e', 'f'], appearance: 'system', motion: 'calm', freeOnly: false, installedSort: 'updates' });
+    assert.strictEqual(U.cleanPrefs({ app: 'Grab', freeOnly: true }).freeOnly, true);
+  });
+
+  await t('window size and place: restored, but never off screen', () => {
+    const screens = [{ x: 0, y: 0, width: 1440, height: 875 }];
+    assert.deepStrictEqual(U.fitBounds(null, screens), { width: 1240, height: 800, maximized: false });
+    assert.deepStrictEqual(U.fitBounds({ x: 100, y: 60, width: 1000, height: 700, maximized: true }, screens), { x: 100, y: 60, width: 1000, height: 700, maximized: true });
+    assert.deepStrictEqual(U.fitBounds({ x: 3000, y: 60, width: 1000, height: 700 }, screens), { width: 1240, height: 800, maximized: false }, 'a monitor that is gone');
+    assert.deepStrictEqual(U.fitBounds({ x: 100, y: -300, width: 1000, height: 700 }, screens), { width: 1240, height: 800, maximized: false }, 'title bar above the screen');
+    assert.strictEqual(U.fitBounds({ x: 10, y: 10, width: 300, height: 200 }, screens).width, 900, 'never smaller than the minimum');
+    assert.strictEqual(U.fitBounds({ x: 0, y: 0, width: 5000, height: 3000 }, screens).width, 1440, 'never bigger than the screen');
+    assert.deepStrictEqual(U.fitBounds({ x: 1500, y: 0, width: 1200, height: 800 }, [...screens, { x: 1440, y: 0, width: 1920, height: 1080 }]), { x: 1500, y: 0, width: 1200, height: 800, maximized: false }, 'second monitor');
+  });
+
+  await t('no emojis in the app or the README', () => {
+    const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
+    const files = ['README.md', ...fs.readdirSync(path.join(__dirname, '../src')).filter(f => /\.(js|html|css)$/.test(f)).map(f => 'src/' + f), ...fs.readdirSync(path.join(__dirname, '../src/ui')).filter(f => /\.(js|html|css)$/.test(f)).map(f => 'src/ui/' + f)];
+    for (const f of files) { const s = fs.readFileSync(path.join(__dirname, '..', f), 'utf8'); const m = s.match(EMOJI); assert(!m, `${f} has an emoji: ${m && m[0]}`); }
+  });
+
+  await t("What's new names only this version", () => {
+    const js = fs.readFileSync(path.join(__dirname, '../src/ui/app.js'), 'utf8');
+    const v = require('../package.json').version.split('.').slice(0, 2).join('.');
+    assert(js.includes(`const WHATS_NEW = { version: '${v}'`), `WHATS_NEW.version is ${v}`);
+  });
+
+  await t('Maison: one accent, no gradients, blur or rainbow in the UI', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../src/ui/app.css'), 'utf8'), js = fs.readFileSync(path.join(__dirname, '../src/ui/app.js'), 'utf8');
+    assert(!/gradient\(/.test(css) && !/gradient\(/.test(js), 'no gradients');
+    assert(!/backdrop-filter\s*:|filter:\s*blur|will-change\s*:/.test(css), 'no blur, no will-change');
+    assert(!/hsl\(\$\{/.test(js), 'no per-app rainbow colours');
+    const loops = css.match(/animation:[^;]*infinite/g) || [];
+    for (const l of loops) assert(/slide|spin|blink|pulse/.test(l), 'only loading indicators loop: ' + l);
+  });
+
   await t('ui files parse', () => {
     for (const f of ['app.js', 'jelly.js']) new Function(fs.readFileSync(path.join(__dirname, '../src/ui', f), 'utf8'));
     for (const f of ['main.js', 'preload.js', 'mac.js', 'win.js']) require('vm').createScript ? new (require('vm').Script)(require('module').wrap(fs.readFileSync(path.join(__dirname, '../src', f), 'utf8'))) : 0;

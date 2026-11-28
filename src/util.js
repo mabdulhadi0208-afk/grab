@@ -122,4 +122,38 @@ async function pool(items, limit, fn) {
 
 function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch {} }
 
-module.exports = { setLogFile, log, run, download, fileNameFor, cmpVer, looksNumericVer, pool, rmrf, BROWSER_UA };
+// Settings, export and import (2.2): keep only what Grab knows, in the shape it expects, whatever the file holds.
+function cleanPrefs(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('This is not a Grab settings file');
+  if (o.app !== 'Grab') throw new Error('This is not a Grab settings file');
+  const strs = (a, max, len) => (Array.isArray(a) ? a : []).filter(x => typeof x === 'string' && x.trim() && x.length <= len).map(x => x.trim()).filter((x, i, l) => l.indexOf(x) === i).slice(0, max);
+  return {
+    app: 'Grab',
+    version: typeof o.version === 'string' ? o.version.slice(0, 20) : '',
+    saved: strs(o.saved, 300, 200),
+    recent: strs(o.recent, 6, 40),
+    appearance: ['system', 'light', 'dark'].includes(o.appearance) ? o.appearance : 'system',
+    motion: ['jelly', 'calm', 'off'].includes(o.motion) ? o.motion : 'jelly',
+    freeOnly: o.freeOnly === true,
+    installedSort: o.installedSort === 'updates' ? 'updates' : 'name',
+  };
+}
+
+// The window opens where you left it (2.2), but never off screen: a saved place that no display still shows enough of
+// (a monitor that was unplugged) falls back to the default size, centred.
+function fitBounds(saved, workAreas, def = { width: 1240, height: 800 }, min = { width: 900, height: 600 }) {
+  const ok = saved && ['x', 'y', 'width', 'height'].every(k => Number.isFinite(saved[k]));
+  if (!ok) return { ...def, maximized: false };
+  const width = Math.max(min.width, Math.round(saved.width)), height = Math.max(min.height, Math.round(saved.height));
+  const b = { x: Math.round(saved.x), y: Math.round(saved.y), width, height };
+  const seen = (workAreas || []).some(a => {
+    const w = Math.min(b.x + b.width, a.x + a.width) - Math.max(b.x, a.x), h = Math.min(b.y + b.height, a.y + a.height) - Math.max(b.y, a.y);
+    return w >= 160 && h >= 120 && b.y >= a.y - 4; // enough of it shows, and the title bar is not above the screen
+  });
+  if (!seen) return { ...def, maximized: !!saved.maximized };
+  const area = workAreas.find(a => b.x < a.x + a.width && b.x + b.width > a.x) || workAreas[0];
+  if (area) { b.width = Math.min(b.width, Math.max(min.width, area.width)); b.height = Math.min(b.height, Math.max(min.height, area.height)); }
+  return { ...b, maximized: !!saved.maximized };
+}
+
+module.exports = { setLogFile, log, run, download, fileNameFor, cmpVer, looksNumericVer, pool, rmrf, cleanPrefs, fitBounds, BROWSER_UA };

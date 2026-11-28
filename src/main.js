@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, net, nativeTheme, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, net, nativeTheme, dialog, screen } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -38,7 +38,7 @@ let rendererReady = false;
 // Light, dark or follow the system (Settings, Appearance). Saved here too, so the window opens in the right colours.
 const appearanceFile = () => path.join(app.getPath('userData'), 'appearance.json');
 function loadAppearance() { try { const m = JSON.parse(fs.readFileSync(appearanceFile(), 'utf8')).mode; if (['system', 'light', 'dark'].includes(m)) nativeTheme.themeSource = m; } catch {} }
-const winColors = () => (nativeTheme.shouldUseDarkColors ? { bg: '#0a0c15', fg: '#f0f1f8' } : { bg: '#f5f6fb', fg: '#141722' });
+const winColors = () => (nativeTheme.shouldUseDarkColors ? { bg: '#0d0c0a', fg: '#f2eee5' } : { bg: '#f6f3ed', fg: '#15130f' });
 function paintWindow() {
   if (!win || win.isDestroyed()) return;
   const c = winColors();
@@ -46,10 +46,23 @@ function paintWindow() {
   if (IS_WIN) { try { win.setTitleBarOverlay({ color: c.bg, symbolColor: c.fg, height: 46 }); } catch {} }
 }
 
+// the window's size and place, kept between launches
+const boundsFile = () => path.join(app.getPath('userData'), 'window.json');
+function loadBounds() {
+  let saved = null; try { saved = JSON.parse(fs.readFileSync(boundsFile(), 'utf8')); } catch {}
+  let areas = []; try { areas = screen.getAllDisplays().map(d => d.workArea); } catch {}
+  return U.fitBounds(saved, areas);
+}
+function saveBounds() {
+  if (!win || win.isDestroyed() || SELFTEST) return;
+  try { const b = win.getNormalBounds(); fs.writeFileSync(boundsFile(), JSON.stringify({ ...b, maximized: win.isMaximized() })); } catch {}
+}
+
 function createWindow() {
   const c = winColors();
+  const b = loadBounds();
   const common = {
-    width: 1240, height: 800, minWidth: 900, minHeight: 600, show: false,
+    width: b.width, height: b.height, ...(b.x != null ? { x: b.x, y: b.y } : {}), minWidth: 900, minHeight: 600, show: false,
     title: 'Grab',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false },
   };
@@ -58,7 +71,9 @@ function createWindow() {
     : { titleBarStyle: 'hidden', titleBarOverlay: { color: c.bg, symbolColor: c.fg, height: 46 }, backgroundColor: c.bg, icon: path.join(__dirname, 'icon.png') };
   win = new BrowserWindow({ ...common, ...plat });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
-  win.once('ready-to-show', () => { if (!SELFTEST) win.show(); });
+  win.once('ready-to-show', () => { if (SELFTEST) return; if (b.maximized) win.maximize(); win.show(); });
+  let boundsT = null; const later = () => { clearTimeout(boundsT); boundsT = setTimeout(saveBounds, 600); };
+  win.on('resize', later); win.on('move', later); win.on('close', saveBounds);
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.on('console-message', (_e, level, message, line, src) => { if (level >= 2) U.log('renderer', level === 3 ? 'ERROR' : 'warn', message, src + ':' + line); });
@@ -505,6 +520,21 @@ ipcMain.handle('ready', () => { rendererReady = true; U.log('renderer ready'); }
 // App Management (Mac): can Grab update and delete other apps, and the way to the switch in System Settings
 ipcMain.handle('access', () => (IS_MAC && backend.appManagement ? backend.appManagement() : 'allowed'));
 ipcMain.handle('access:open', () => { if (IS_MAC) shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles'); });
+// Settings, export and import: a small JSON file the person picks; only known keys survive either way
+ipcMain.handle('prefs:export', async (_e, data) => {
+  const clean = U.cleanPrefs(data);
+  const r = await dialog.showSaveDialog(win, { title: 'Export Grab settings', defaultPath: path.join(app.getPath('downloads'), 'Grab settings.json'), filters: [{ name: 'Grab settings', extensions: ['json'] }] });
+  if (r.canceled || !r.filePath) return false;
+  fs.writeFileSync(r.filePath, JSON.stringify(clean, null, 2));
+  return true;
+});
+ipcMain.handle('prefs:import', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Import Grab settings', properties: ['openFile'], filters: [{ name: 'Grab settings', extensions: ['json'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const st = fs.statSync(r.filePaths[0]); if (st.size > 1e6) throw new Error('That file is too big to be Grab settings');
+  let o; try { o = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8')); } catch { throw new Error('That file is not valid JSON'); }
+  return U.cleanPrefs(o);
+});
 ipcMain.handle('appearance', (_e, mode) => {
   if (!['system', 'light', 'dark'].includes(mode)) return;
   nativeTheme.themeSource = mode;

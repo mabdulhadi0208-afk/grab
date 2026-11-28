@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('grab', {
   access: call('access'),
   openAccess: call('access:open'),
   appearance: call('appearance'),
+  exportPrefs: call('prefs:export'),
+  importPrefs: call('prefs:import'),
   onCatalog: on('catalog'),
   onJob: on('job'),
   onScan: on('scan'),
